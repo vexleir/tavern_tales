@@ -690,34 +690,23 @@ def build_ui():
                 gr.Markdown("## World State Viewer")
 
                 with gr.Row():
-                    with gr.Tab("NPCs"):
+                    with gr.Column():
+                        gr.Markdown("### NPCs")
                         npc_viewer = gr.Markdown(value=get_npc_states)
                         refresh_npcs = gr.Button("Refresh NPCs")
                         refresh_npcs.click(get_npc_states, outputs=[npc_viewer])
 
-                    with gr.Tab("Events"):
+                    with gr.Column():
+                        gr.Markdown("### Events")
                         events_viewer = gr.Markdown(value=get_world_events)
                         refresh_events = gr.Button("Refresh Events")
                         refresh_events.click(get_world_events, outputs=[events_viewer])
 
-                    with gr.Tab("Lore"):
-                        lore_category = gr.Dropdown(
-                            label="Category",
-                            choices=["all", "history", "faction", "location", "quest"],
-                            value="all"
-                        )
+                    with gr.Column():
+                        gr.Markdown("### Lore")
                         lore_viewer = gr.Markdown(value=get_lore_browser("all"))
-                        lore_category.change(
-                            lambda c: get_lore_browser(c),
-                            inputs=[lore_category],
-                            outputs=[lore_viewer]
-                        )
                         refresh_lore = gr.Button("Refresh Lore")
-                        refresh_lore.click(
-                            lambda c: get_lore_browser(c),
-                            inputs=[lore_category],
-                            outputs=[lore_viewer]
-                        )
+                        refresh_lore.click(get_lore_browser, inputs=["all"], outputs=[lore_viewer])
 
             # ── Memory Inspector Tab ────────────────────────────────────────
             with gr.Tab("🧠 Memory"):
