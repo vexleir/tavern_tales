@@ -51,6 +51,8 @@ def create_world(
 
 
 def get_world(world_id: str) -> Optional[World]:
+    if not world_id:
+        return None
     conn = get_connection(world_id)
     cur = conn.cursor()
     cur.execute("SELECT * FROM worlds WHERE id = ?", (world_id,))

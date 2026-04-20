@@ -455,29 +455,39 @@ def build_ui():
             with gr.Tab("⚙️ Setup", id="setup"):
                 gr.Markdown("## World Setup")
 
+                # Both dropdowns defined early so create_new_world can update both
+                gr.Markdown("### Select or Create a World")
+                with gr.Row():
+                    world_selector = gr.Dropdown(
+                        label="Select World",
+                        choices=[],
+                        value=None,
+                        allow_custom_value=True
+                    )
+                    login_world = gr.Dropdown(
+                        label="Or Join World",
+                        choices=[],
+                        allow_custom_value=True
+                    )
+
+                world_info = gr.JSON(label="World Details")
+
+                def on_world_select(world_id):
+                    if not world_id:
+                        return {}
+                    return load_world_details(world_id)
+
+                world_selector.change(
+                    on_world_select,
+                    inputs=[world_selector],
+                    outputs=[world_info]
+                )
+
+                gr.Markdown("---")
+                gr.Markdown("### Create New World")
+
                 with gr.Row():
                     with gr.Column(scale=1):
-                        world_selector = gr.Dropdown(
-                            label="Select World",
-                            choices=load_worlds(),
-                            value=None,
-                            allow_custom_value=True
-                        )
-                        world_info = gr.JSON(label="World Details")
-
-                        def on_world_select(world_id):
-                            if not world_id:
-                                return {}
-                            return load_world_details(world_id)
-
-                        world_selector.change(
-                            on_world_select,
-                            inputs=[world_selector],
-                            outputs=[world_info]
-                        )
-
-                    with gr.Column(scale=1):
-                        gr.Markdown("### Create New World")
                         new_world_name = gr.Textbox(label="World Name", placeholder="Brindmoor — Lost Love")
                         new_model = gr.Textbox(
                             label="Ollama Model",
@@ -485,24 +495,26 @@ def build_ui():
                             placeholder="qwen2.5-uncensored:14b"
                         )
                         new_adult_mode = gr.Checkbox(label="Adult Content Mode", value=False)
+
+                    with gr.Column(scale=1):
                         create_btn = gr.Button("Create World", variant="primary")
                         create_status = gr.Textbox(label="Status")
 
+                        def do_create(name, adult, model):
+                            status, choices = create_new_world(name, adult, model)
+                            # Return status and same choices for both dropdowns
+                            return status, choices, choices
+
                         create_btn.click(
-                            create_new_world,
+                            do_create,
                             inputs=[new_world_name, new_adult_mode, new_model],
-                            outputs=[create_status, world_selector]
+                            outputs=[create_status, world_selector, login_world]
                         )
 
                 gr.Markdown("---")
                 gr.Markdown("## Join World")
 
                 with gr.Row():
-                    login_world = gr.Dropdown(
-                        label="World",
-                        choices=load_worlds(),
-                        allow_custom_value=True
-                    )
                     login_name = gr.Textbox(
                         label="Character Name",
                         placeholder="Your character's name"
@@ -734,18 +746,6 @@ def build_ui():
                 - **Session Summary**: Compressed narrative of this session (refreshes every 20 turns)
                 - **World Lore**: Persistent NPC memories, world history, quest flags
                 """)
-
-        def load_all_worlds():
-            return load_worlds()
-
-        app.load(
-            load_all_worlds,
-            outputs=[world_selector]
-        )
-        app.load(
-            load_all_worlds,
-            outputs=[login_world]
-        )
 
     return app
 
