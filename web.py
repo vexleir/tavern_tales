@@ -761,7 +761,6 @@ def main():
         server_port=7860,
         server_name="0.0.0.0",
         share=False,
-        theme=theme,
     )
 
 
