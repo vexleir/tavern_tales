@@ -330,6 +330,9 @@ class OllamaClient:
             "temperature": 0.8,
             "top_p": 0.9,
             "num_predict": 1024,  # max tokens
+            "repeat_penalty": 1.15,
+            "presence_penalty": 0.1,
+            "frequency_penalty": 0.1,
         }
 
         kwargs = {
@@ -605,9 +608,14 @@ SESSION SUMMARY:"""
 
         # Stream from Ollama
         full_response = ""
-        for chunk in self.ollama.generate(full_prompt, system=system_prompt):
-            full_response += chunk
-            yield chunk
+        
+        def inner_generator():
+            nonlocal full_response
+            for chunk in self.ollama.generate(full_prompt, system=system_prompt):
+                full_response += chunk
+                yield chunk
+                
+        yield from self._filter_stream(inner_generator())
 
         # Update world state from GM response
         self.state_updater.update(
@@ -664,10 +672,55 @@ SESSION SUMMARY:"""
         )
         opening_prompt += "\n\n" + self.SUMMARY_INSTRUCTION
 
-        response = ""
-        for chunk in self.ollama.generate(opening_prompt, system=system_prompt):
-            response += chunk
-            yield chunk
+        # Stream from Ollama
+        response_full = ""
+        
+        def inner_generator():
+            nonlocal response_full
+            for chunk in self.ollama.generate(opening_prompt, system=system_prompt):
+                response_full += chunk
+                yield chunk
+                
+        yield from self._filter_stream(inner_generator())
 
         # Save opening as GM message at turn 0
-        self.state_updater._save_gm_message(response, 0)
+        self.state_updater._save_gm_message(response_full, 0)
+        
+    def _filter_stream(self, stream_gen) -> Generator[str, None, None]:
+        """Filters out <think> blocks and [STATE] blocks from being yielded to the UI."""
+        buffer = ""
+        in_think = False
+        in_state = False
+
+        for chunk in stream_gen:
+            buffer += chunk
+            
+            if not in_think and "<think>" in buffer:
+                idx = buffer.find("<think>")
+                if idx > 0:
+                    yield buffer[:idx]
+                buffer = buffer[idx:]
+                in_think = True
+                
+            if in_think and "</think>" in buffer:
+                idx = buffer.find("</think>") + len("</think>")
+                buffer = buffer[idx:]
+                in_think = False
+                
+            if not in_state and "[STATE]" in buffer:
+                idx = buffer.find("[STATE]")
+                if idx > 0:
+                    yield buffer[:idx]
+                in_state = True
+                buffer = buffer[idx:]
+                
+            if not in_think and not in_state:
+                if len(buffer) > 15:
+                    yield buffer[:-15]
+                    buffer = buffer[-15:]
+                    
+        if not in_think and not in_state and buffer:
+            # Strip partial trailing tags if they got stuck
+            if buffer.endswith("<") or buffer.endswith("["):
+                buffer = buffer[:-1]
+            yield buffer

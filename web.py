@@ -481,10 +481,20 @@ def build_ui():
                 with gr.Row():
                     with gr.Column(scale=1):
                         new_world_name = gr.Textbox(label="World Name", placeholder="Brindmoor — Lost Love")
-                        new_model = gr.Textbox(
+                        
+                        try:
+                            import ollama
+                            local_models = [m.model for m in ollama.list().models]
+                        except Exception:
+                            local_models = ["qwen2.5-uncensored:14b"]
+                        if not local_models:
+                            local_models = ["qwen2.5-uncensored:14b"]
+                            
+                        new_model = gr.Dropdown(
                             label="Ollama Model",
-                            value="qwen2.5-uncensored:14b",
-                            placeholder="qwen2.5-uncensored:14b"
+                            choices=local_models,
+                            value=local_models[0] if local_models else None,
+                            allow_custom_value=True
                         )
                         new_adult_mode = gr.Checkbox(label="Adult Content Mode", value=False)
 
@@ -535,7 +545,7 @@ def build_ui():
                         chatbot = gr.Chatbot(
                             label="Tavern Tales",
                             height=550,
-
+                            type="messages",
                             avatar_images=("🧑", "🍺")
                         )
 
@@ -598,32 +608,36 @@ def build_ui():
                         )
 
                 def handle_send(message, history):
-                    """Gradio Chatbot callback — returns (response, history)."""
+                    """Gradio Chatbot callback — yields (response, history)."""
                     if not message.strip():
-                        return "", history
+                        yield "", history
+                        return
 
                     history = history or []
                     history.append({"role": "user", "content": message})
+                    yield "", history
 
                     if not state.processor:
                         assistant_msg = "No active game. Please log in via the Setup tab."
                         history.append({"role": "assistant", "content": assistant_msg})
-                        return "", history
+                        yield "", history
+                        return
 
                     try:
+                        state.add_to_history("player", message)
+                        history.append({"role": "assistant", "content": ""})
                         full_response = ""
                         for chunk in state.processor.process_turn(message):
                             full_response += chunk
+                            history[-1]["content"] = full_response
+                            yield "", history
 
-                        state.add_to_history("player", message)
                         state.add_to_history("assistant", full_response)
-                        history.append({"role": "assistant", "content": full_response})
-                        return "", history
 
                     except Exception as e:
                         error_msg = f"[Error: {e}]"
                         history.append({"role": "assistant", "content": error_msg})
-                        return "", history
+                        yield "", history
 
                 def clear_history():
                     state._chat_history = []
@@ -674,11 +688,14 @@ def build_ui():
                     )
                     state._chat_history = []
 
+                    history = [{"role": "assistant", "content": ""}]
+                    yield "", history
+
                     opening = ""
                     for chunk in state.processor.get_opening_narrative():
                         opening += chunk
-
-                    return "", [("assistant", opening)]
+                        history[-1]["content"] = opening
+                        yield "", history
 
                 new_scene_btn.click(
                     handle_new_scene,
