@@ -465,13 +465,13 @@ def build_ui():
                 with gr.Row():
                     world_selector = gr.Dropdown(
                         label="Select World",
-                        choices=[],
+                        choices=load_worlds(),
                         value=None,
                         allow_custom_value=True
                     )
                     login_world = gr.Dropdown(
                         label="Or Join World",
-                        choices=[],
+                        choices=load_worlds(),
                         allow_custom_value=True
                     )
 
@@ -505,7 +505,7 @@ def build_ui():
                         def do_create(name, adult, model):
                             status, choices = create_new_world(name, adult, model)
                             # Return status and same choices for both dropdowns
-                            return status, choices, choices
+                            return status, gr.update(choices=choices), gr.update(choices=choices)
 
                         create_btn.click(
                             do_create,
