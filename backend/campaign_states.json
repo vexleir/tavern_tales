@@ -8,10 +8,10 @@
         },
         "npcs": [
             {
-                "name": "Lanah",
-                "disposition": "Neutral",
+                "name": "Lina",
+                "disposition": "Friendly",
                 "secrets_known": [
-                    "She secretely has a crush on Matt"
+                    "She secretely has a huge crush on Matt"
                 ]
             }
         ]

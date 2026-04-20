@@ -68,7 +68,7 @@ function App() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           messages: apiMessages,
-          model: 'llama3',
+          model: 'fluffy/l3-8b-stheno-v3.2:latest',
           turn: newMessages.length
         })
       });
