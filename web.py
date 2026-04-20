@@ -178,7 +178,7 @@ def select_world_and_login(world_id: str, player_name: str, password: str) -> tu
     state.processor = GMTurnProcessor(world.id, player.id, world.model_name)
     state._chat_history = []
 
-    return msg, "game_tab"
+    return msg
 
 
 def send_message(message: str) -> tuple[str, str]:
@@ -450,9 +450,9 @@ def build_ui():
         *A dark fantasy RPG, Game Mastered by AI*
         """)
 
-        with gr.Tabs():
+        with gr.Tabs() as tabs_container:
             # ── Setup Tab ──────────────────────────────────────────────────
-            with gr.TabItem("⚙️ Setup"):
+            with gr.Tab("⚙️ Setup", id="setup"):
                 gr.Markdown("## World Setup")
 
                 with gr.Row():
@@ -463,18 +463,17 @@ def build_ui():
                             value=None,
                             allow_custom_value=True
                         )
-                        world_info = gr.JSON(label="World Details", visible=False)
+                        world_info = gr.JSON(label="World Details")
 
                         def on_world_select(world_id):
                             if not world_id:
-                                return gr.update(visible=False), ""
-                            details = load_world_details(world_id)
-                            return gr.update(visible=True), details
+                                return {}
+                            return load_world_details(world_id)
 
                         world_selector.change(
                             on_world_select,
                             inputs=[world_selector],
-                            outputs=[world_info, world_selector]
+                            outputs=[world_info]
                         )
 
                     with gr.Column(scale=1):
@@ -520,21 +519,11 @@ def build_ui():
                 login_btn.click(
                     select_world_and_login,
                     inputs=[login_world, login_name, login_password],
-                    outputs=[login_msg, app]
-                )
-
-                # JS to switch tabs — we use a hidden textbox as a tab switch trigger
-                def go_to_game(msg):
-                    return msg
-
-                login_msg.change(
-                    lambda x: gr.update(selected="game_tab") if x and "ready" in x.lower() else gr.update(),
-                    inputs=[login_msg],
-                    outputs=[app]
+                    outputs=[login_msg]
                 )
 
             # ── Game Tab ───────────────────────────────────────────────────
-            with gr.TabItem("🎭 The Game", id="game_tab") as game_tab:
+            with gr.Tab("🎭 The Game", id="game") as game_tab:
                 gr.Markdown("### Your Story")
 
                 with gr.Row():
@@ -697,21 +686,21 @@ def build_ui():
                 )
 
             # ── World State Tab ─────────────────────────────────────────────
-            with gr.TabItem("🗺️ World State"):
+            with gr.Tab("🗺️ World State"):
                 gr.Markdown("## World State Viewer")
 
                 with gr.Row():
-                    with gr.TabItem("NPCs"):
+                    with gr.Tab("NPCs"):
                         npc_viewer = gr.Markdown(value=get_npc_states)
                         refresh_npcs = gr.Button("Refresh NPCs")
                         refresh_npcs.click(get_npc_states, outputs=[npc_viewer])
 
-                    with gr.TabItem("Events"):
+                    with gr.Tab("Events"):
                         events_viewer = gr.Markdown(value=get_world_events)
                         refresh_events = gr.Button("Refresh Events")
                         refresh_events.click(get_world_events, outputs=[events_viewer])
 
-                    with gr.TabItem("Lore"):
+                    with gr.Tab("Lore"):
                         lore_category = gr.Dropdown(
                             label="Category",
                             choices=["all", "history", "faction", "location", "quest"],
@@ -731,7 +720,7 @@ def build_ui():
                         )
 
             # ── Memory Inspector Tab ────────────────────────────────────────
-            with gr.TabItem("🧠 Memory"):
+            with gr.Tab("🧠 Memory"):
                 gr.Markdown("## Memory Inspector")
                 gr.Markdown("*Current working context sent to the GM each turn*")
 
@@ -746,10 +735,16 @@ def build_ui():
                 - **World Lore**: Persistent NPC memories, world history, quest flags
                 """)
 
-        # Initial state
+        def load_all_worlds():
+            return load_worlds()
+
         app.load(
-            load_worlds,
-            outputs=[world_selector, login_world]
+            load_all_worlds,
+            outputs=[world_selector]
+        )
+        app.load(
+            load_all_worlds,
+            outputs=[login_world]
         )
 
     return app
