@@ -443,7 +443,7 @@ def build_ui():
         secondary_hue="slate",
         neutral_hue="gray",
     )
-    with gr.Blocks(title="Tavern Tales", theme=theme) as app:
+    with gr.Blocks(title="Tavern Tales") as app:
 
         gr.Markdown("""
         # 🍺 Tavern Tales
@@ -542,7 +542,7 @@ def build_ui():
                         chatbot = gr.Chatbot(
                             label="Tavern Tales",
                             height=550,
-                            show_copy_button=True,
+
                             avatar_images=("🧑", "🍺")
                         )
 
@@ -762,6 +762,7 @@ def main():
         server_port=7860,
         server_name="0.0.0.0",
         share=False,
+        theme=theme,
     )
 
 
