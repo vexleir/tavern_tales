@@ -53,18 +53,21 @@ def create_world(
 def get_world(world_id: str) -> Optional[World]:
     if not world_id:
         return None
-    conn = get_connection(world_id)
-    cur = conn.cursor()
-    cur.execute("SELECT * FROM worlds WHERE id = ?", (world_id,))
-    r = cur.fetchone()
-    conn.close()
-    if not r:
+    try:
+        conn = get_connection(world_id)
+        cur = conn.cursor()
+        cur.execute("SELECT * FROM worlds WHERE id = ?", (world_id,))
+        r = cur.fetchone()
+        conn.close()
+        if not r:
+            return None
+        return World(
+            id=r["id"], name=r["name"], description=r["description"],
+            adult_mode=r["adult_mode"], model_name=r["model_name"],
+            created_at=r["created_at"]
+        )
+    except sqlite3.OperationalError:
         return None
-    return World(
-        id=r["id"], name=r["name"], description=r["description"],
-        adult_mode=r["adult_mode"], model_name=r["model_name"],
-        created_at=r["created_at"]
-    )
 
 
 def get_or_create_default_world() -> World:

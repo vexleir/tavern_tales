@@ -72,6 +72,8 @@ def load_worlds():
 
 def load_world_details(world_id: str) -> dict:
     """Return world metadata for the info panel."""
+    if not world_id:
+        return {"name": "—", "adult_mode": False, "model": ""}
     w = get_world(world_id)
     if not w:
         return {"name": "—", "adult_mode": False, "model": ""}
