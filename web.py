@@ -475,19 +475,6 @@ def build_ui():
                         allow_custom_value=True
                     )
 
-                world_info = gr.JSON(label="World Details")
-
-                def on_world_select(world_id):
-                    if not world_id:
-                        return {}
-                    return load_world_details(world_id)
-
-                world_selector.change(
-                    on_world_select,
-                    inputs=[world_selector],
-                    outputs=[world_info]
-                )
-
                 gr.Markdown("---")
                 gr.Markdown("### Create New World")
 
