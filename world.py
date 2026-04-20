@@ -97,18 +97,21 @@ def list_worlds() -> list[World]:
     import sqlite3
     worlds = []
     for db_path in glob.glob(f"{db_dir}/*.db"):
-        conn = sqlite3.connect(db_path)
-        conn.row_factory = sqlite3.Row
-        cur = conn.cursor()
-        cur.execute("SELECT * FROM worlds LIMIT 1")
-        r = cur.fetchone()
-        conn.close()
-        if r:
-            worlds.append(World(
-                id=r["id"], name=r["name"], description=r["description"],
-                adult_mode=r["adult_mode"], model_name=r["model_name"],
-                created_at=r["created_at"]
-            ))
+        try:
+            conn = sqlite3.connect(db_path)
+            conn.row_factory = sqlite3.Row
+            cur = conn.cursor()
+            cur.execute("SELECT * FROM worlds LIMIT 1")
+            r = cur.fetchone()
+            conn.close()
+            if r:
+                worlds.append(World(
+                    id=r["id"], name=r["name"], description=r["description"],
+                    adult_mode=r["adult_mode"], model_name=r["model_name"],
+                    created_at=r["created_at"]
+                ))
+        except sqlite3.OperationalError:
+            continue
     return worlds
 
 

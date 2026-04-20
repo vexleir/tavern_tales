@@ -61,7 +61,10 @@ state = AppState()
 
 def load_worlds():
     """Load existing worlds for the world selector."""
-    worlds = list_worlds()
+    try:
+        worlds = list_worlds()
+    except Exception:
+        worlds = []
     choices = [("— Select a world —", None)]
     choices += [(w.name, w.id) for w in worlds]
     return choices
