@@ -487,7 +487,7 @@ def build_ui():
                         )
                         new_adult_mode = gr.Checkbox(label="Adult Content Mode", value=False)
                         create_btn = gr.Button("Create World", variant="primary")
-                        create_status = gr.Textbox(label="Status", interactive=False)
+                        create_status = gr.Textbox(label="Status")
 
                         create_btn.click(
                             create_new_world,
@@ -515,7 +515,7 @@ def build_ui():
                     )
                     login_btn = gr.Button("Enter the Tavern", variant="primary")
 
-                login_msg = gr.Textbox(label="Status", interactive=False, lines=1)
+                login_msg = gr.Textbox(label="Status", lines=1)
 
                 login_btn.click(
                     select_world_and_login,
@@ -568,7 +568,6 @@ def build_ui():
                         )
                         adult_status = gr.Textbox(
                             label="Status",
-                            interactive=False,
                             lines=1
                         )
 
@@ -584,7 +583,7 @@ def build_ui():
                         )
 
                         gr.Markdown("### Scene Info")
-                        scene_info = gr.JSON(label="Current Scene", interactive=False)
+                        scene_info = gr.JSON(label="Current Scene")
 
                         def update_scene_info():
                             if state.current_scene and state.current_world:
@@ -602,7 +601,7 @@ def build_ui():
 
                         gr.Markdown("### Openings")
                         open_btn = gr.Button("Get Opening Narrative", variant="secondary")
-                        open_output = gr.Textbox(label="Opening", interactive=False, lines=5)
+                        open_output = gr.Textbox(label="Opening", lines=5)
 
                         open_btn.click(
                             get_opening_narrative,
