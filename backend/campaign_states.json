@@ -1,0 +1,19 @@
+{
+    "default_campaign": {
+        "player": {
+            "name": "Matt",
+            "health": 100,
+            "gold": 50,
+            "location": "The Ember & Ash Tavern"
+        },
+        "npcs": [
+            {
+                "name": "Lanah",
+                "disposition": "Neutral",
+                "secrets_known": [
+                    "She secretely has a crush on Matt"
+                ]
+            }
+        ]
+    }
+}
