@@ -545,7 +545,6 @@ def build_ui():
                         chatbot = gr.Chatbot(
                             label="Tavern Tales",
                             height=550,
-                            type="messages",
                             avatar_images=("🧑", "🍺")
                         )
 
@@ -723,7 +722,7 @@ def build_ui():
                         gr.Markdown("### Lore")
                         lore_viewer = gr.Markdown(value=get_lore_browser("all"))
                         refresh_lore = gr.Button("Refresh Lore")
-                        refresh_lore.click(get_lore_browser, inputs=["all"], outputs=[lore_viewer])
+                        refresh_lore.click(lambda: get_lore_browser("all"), inputs=[], outputs=[lore_viewer])
 
             # ── Memory Inspector Tab ────────────────────────────────────────
             with gr.Tab("🧠 Memory"):
