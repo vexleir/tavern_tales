@@ -527,7 +527,7 @@ def build_ui():
                 )
 
             # ── Game Tab ───────────────────────────────────────────────────
-            with gr.Tab("🎭 The Game", id="game") as game_tab:
+            with gr.Tab("🎭 The Game", id="game"):
                 gr.Markdown("### Your Story")
 
                 with gr.Row():
@@ -587,10 +587,6 @@ def build_ui():
                                 }
                             return {}
 
-                        game_tab.select(
-                            update_scene_info,
-                            outputs=[scene_info]
-                        )
 
                         gr.Markdown("### Openings")
                         open_btn = gr.Button("Get Opening Narrative", variant="secondary")
