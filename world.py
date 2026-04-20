@@ -7,6 +7,7 @@ The Lost Love scenario is the built-in starting point.
 
 import json
 import uuid
+import sqlite3
 from typing import Optional
 
 from models import (
@@ -463,7 +464,6 @@ def create_lost_love_world(
 # ─────────────────────────────────────────────────────────────────────────────
 
 import os
-import sqlite3
 
 
 def get_world_db_path(world_id: str) -> str:
