@@ -1,0 +1,325 @@
+{
+  "schema_version": 2,
+  "campaign_id": "campaign_1777037012695",
+  "created_at": "2026-04-24T13:26:12.759596+00:00",
+  "models": {
+    "gm": "HammerAI/mn-mag-mell-r1:latest",
+    "utility": "hf.co/bartowski/Qwen2.5-14B_Uncensored_Instruct-GGUF:Q4_K_M",
+    "nsfw_world_gen": true
+  },
+  "player": {
+    "name": "Matt",
+    "location": "Whispering Woods",
+    "stats": {
+      "Health": 99,
+      "Gold": 34
+    },
+    "inventory": [
+      "Rusty Sword",
+      "Old Tome",
+      "Protection Charms",
+      "Travel Pack",
+      "Bedroll",
+      "Water Skins",
+      "Flint and Steel",
+      "Dried Rations",
+      "Silk Sheets",
+      "Scented Oils",
+      "Spectral Map"
+    ]
+  },
+  "npcs": [
+    {
+      "name": "Eira",
+      "disposition": "Friendly",
+      "secrets_known": [
+        "Matt's village is known for producing talented sorcerers"
+      ]
+    },
+    {
+      "name": "Gorm",
+      "disposition": "Friendly",
+      "secrets_known": [
+        "A powerful Sex Sorcerer resides in the nearby town, rumored to possess a vast harem"
+      ]
+    },
+    {
+      "name": "Lysander",
+      "disposition": "Suspicious",
+      "secrets_known": [
+        "Rival sorcerers have been known to abuse and mistreat their claimed thralls"
+      ]
+    },
+    {
+      "name": "Villager",
+      "disposition": "Suspicious",
+      "secrets_known": []
+    },
+    {
+      "name": "Morwen",
+      "disposition": "Friendly",
+      "secrets_known": []
+    }
+  ],
+  "lorebook": {
+    "Claiming": "The process by which Sex Sorcerers imbue their partners with divine pleasure and forge unbreakable bonds.",
+    "Divine Orgasm": "An overwhelmingly intense orgasm experienced by those Claimed, characterized by convulsions, screaming in pleasure, and extreme physical release.",
+    "Harem": "A collection of thralls claimed by a Sex Sorcerer, serving as both lovers and sources of magical power"
+  },
+  "world_description": "In the realm of Arcadia, Sorcerers wield immense power, with those specializing in sex magic holding a unique position. These 'Sex Sorcerers' can tap into extraordinary abilities through a process called 'Claiming', where they imbue their partners with divine pleasure and forge unbreakable bonds. The consequences of Claiming are far-reaching - the receiver experiences an intense, transcendent orgasm, develops profound devotion to the claimer, and gains enhanced magical prowess in return. This dynamic has given rise to a complex society where Sex Sorcerers maintain harems of claimed thralls, who serve as both lovers and sources of power. The pursuit of Claiming drives many adventures, as individuals seek to expand their harem, defeat rival sorcerers, and uncover the secrets of this potent magic.",
+  "starting_scene": "Matt stands atop a windswept hill overlooking his humble village, the first rays of dawn casting a warm glow across the thatched roofs. He's just received news of a nearby town where a powerful Sex Sorcerer is said to reside, rumored to possess a vast and diverse harem. Matt's heart races with anticipation - this could be his chance to prove himself, claim new thralls, and grow in both magic and status.",
+  "messages": [
+    {
+      "id": "msg_f63577a5bafc",
+      "role": "user",
+      "content": "Begin the scene. Narrate the opening in vivid detail using the world, scene, and protagonist context provided. End at a decision point.",
+      "timestamp": "2026-04-24T13:27:57.994973+00:00",
+      "is_kickoff": true,
+      "partial": false
+    },
+    {
+      "id": "msg_8c208be504e5",
+      "role": "assistant",
+      "content": "The first light of dawn breaks over Willowdale village, bathing the humble homes in a warm, amber glow. A crisp breeze sweeps up the hillside where Matt stands alone, his brown cloak billowing gently behind him. His heart pounds with anticipation as he gazes down at the sleepy hamlet below - it's the only home he's ever known.\n\nYet, the news that reached Willowdale yesterday has ignited a spark within Matt. A powerful Sex Sorcerer resides in the town of Millfield not far from here, rumored to command an extensive harem and wield formidable magic. As one of Willowdale's own rare sorcerers gifted with Claiming abilities, Matt feels drawn towards this revelation like a moth to flame.\n\nHe grips his rusty sword at his side, the metal cool beneath his fingertips. It's not much, but it's all he has as he prepares to embark on an adventure that could elevate him from being just another village boy to a formidable Sex Sorcerer in his own right.\n\nMatt takes one last look over Willowdale before turning towards Millfield, hidden behind the rolling hills under the veil of morning mist. The road stretches out ahead of him, ripe with promise and peril alike. He knows he must be cautious - there are those who would seek to use others for their own gain rather than forge genuine bonds.\n\nHe thinks back to whispers of rival sorcerers abusing their claimed thralls, treating them as mere vessels for magic rather than loving companions. Matt vows not to fall into such dark paths; he wants his future harem to be a testament to the heights of pleasure and devotion, not suffering.\n\nWith renewed determination, Matt sets off down the hill towards Millfield, ready to test his Claiming abilities against whatever challenges or temptations await him in that distant town. The first rays of sunlight glint off his sword as he walks away from Willowdale's comforting familiarity, stepping into a world where raw magical power and intimate connections intertwine.\n\nHis hand rests on the hilt of his blade, ready for anything as the road to Millfield unfurls before him like an invitation - one that Matt is eager to accept. He knows not what trials or delights await, but with each step, he feels the first stirrings of his power awakening in anticipation.\n\nThe decision is yours now: do you continue on this path alone for now, or seek guidance from a friendly villager before setting out? The road stretches ahead, full of promise and uncertainty.",
+      "timestamp": "2026-04-24T13:27:57.994993+00:00",
+      "is_kickoff": true,
+      "partial": false
+    },
+    {
+      "id": "msg_f15605d019d6",
+      "role": "user",
+      "content": "I'm going to seek out Eira first and tell her the news that I discovered that I am a sex sorcerer",
+      "timestamp": "2026-04-24T13:31:05.927382+00:00",
+      "is_kickoff": false,
+      "partial": false
+    },
+    {
+      "id": "msg_c2b4ff030b24",
+      "role": "assistant",
+      "content": "As Matt makes his way through the waking village towards Eira's cottage at the edge of town, he ponders how best to reveal this revelation about himself. Eira has always been kind to him, like an aunt or older sister figure, and her wisdom is respected by all in Willowdale.\n\nSmoke curls lazily from Eira's chimney as Matt approaches her door, knocking gently before pushing it open. \"Eira? It's Matt,\" he calls out softly.\n\"Come in, dear boy!\" Her voice echoes warmly from within the cozy interior.\n\nThe cottage is much like you remember - a few well-worn but comfortable chairs gathered around the fireplace, shelves lined with books and strange curiosities that hint at her knowledge of herbs and healing. Eira sits by the hearth, an afghan draped over her lap as she mends some fishing nets.\nShe looks up at him with those bright blue eyes that seem to hold a touch of mischief no matter her age. \"You're up early today,\" she notes with a smile.\n\nEira sets aside her work and gestures for you to take a seat near the fire, inviting you to share what's on your mind without needing to ask aloud. She always did have a knack for sensing when there was more to one of Matt's visits than met the eye. The decision is yours now - how would you like to approach revealing this newfound knowledge about yourself?",
+      "timestamp": "2026-04-24T13:31:05.927400+00:00",
+      "is_kickoff": false,
+      "partial": false
+    },
+    {
+      "id": "msg_1fdff8c45544",
+      "role": "user",
+      "content": "I explain to her that I discovered I have innate abilities as a sex sorcerer",
+      "timestamp": "2026-04-24T13:36:17.316600+00:00",
+      "is_kickoff": false,
+      "partial": false
+    },
+    {
+      "id": "msg_9df3d45e748f",
+      "role": "assistant",
+      "content": "Matt takes a deep breath, his heart fluttering nervously in his chest as he prepares to reveal his secret to Eira. He settles into the chair across from her, leaning forward and resting his elbows on his knees.\n\n\"Eira,\" Matt begins hesitantly, choosing his words carefully. \"There's something I need to tell you... something I've recently discovered about myself.\" He glances up at her, gauging her reaction before continuing.\n\n\"I found out that I possess abilities - innate talents of a Sex Sorcerer. Claiming powers, they call it. It means...\" Matt pauses, feeling his cheeks flush slightly as he tries to explain the intimate nature of these gifts. \"It allows me to forge deep connections with others through magical bonding and pleasure.\"\n\nHe watches Eira intently for any sign of surprise or judgment, but her expression remains warmly attentive, encouraging him to go on.\n\n\"I know it might sound strange,\" Matt says softly, \"especially coming from me. But I feel like this is my path now - to grow in power responsibly and care for those who choose to join with me.\"\n\nMatt falls silent then, awaiting Eira's response as he grips his hands together tightly between his knees. The revelation has left him feeling vulnerable yet hopeful somehow.\n\nEira studies Matt thoughtfully for a long moment before speaking, her voice gentle but firm.\n\"You know,\" she begins slowly, \"I've always suspected you had something special within you, dear boy.\" She leans forward to pat his knee reassuringly.\n\n\"Willowdale is known far and wide for breeding talented sorcerers like yourself. It's a heavy responsibility, yes...but one I have no doubt you'll bear with compassion and wisdom.\"\n\nEira stands slowly from her chair and retrieves an old tome from the shelf behind her - its leather cover cracked with age. She hands it to Matt, who accepts it reverently.\n\n\"This belonged to your great-grandmother,\" she explains. \"She was a Sex Sorcerer of great renown in her time. I think you'll find much guidance within these pages as you begin your journey.\"\n\nEira's eyes shine with pride and affection as she looks down at Matt, a small smile playing on her lips.\n\"Remember dear - power is nothing without the love and respect you show others,\" she murmurs, echoing the sentiment that has guided Willowdale for generations.\n\nThe weight of tradition settles upon your shoulders like a cloak as Eira's blessing sinks in. You know this ...You know this is only the beginning, Matt,\" she continues softly. \"There will be challenges ahead - rivals who seek to exploit others for their own gain, temptations that could lead you astray.\" Eira's gaze turns pensive.\n\n\"Promise me one thing, dear boy,\" her voice takes on a more serious tone as she fixes him with an unwavering stare. \" Promise me you'll never lose sight of what truly matters - the trust and consent of those who choose to join their spirit with yours through Claiming.\"\n\nMatt nods solemnly, Eira's words resonating deep within his heart. He understands all too well the importance of walking this path with integrity.\n\n\"Thank you for your wisdom, Eira,\" he murmurs as he rises from his chair, clutching his great-grandmother's tome to his chest like a sacred treasure. \"I will carry it always.\"\n\nWith renewed determination and Eira's blessing, Matt prepares to set out towards Millfield once more - but now armed not just with physical weaponry, but also the knowledge of Willowdale's traditions and values. He knows there is much he has yet to learn about mastering his Claiming abilities.\n\nAs if sensing his thoughts, Eira speaks again: \"Matt? A word of caution before you go.\" She pauses briefly before continuing.\n\n\"That sorcerer in Millfield... I've heard whispers of him. Some say he's grown reckless and arrogant with all that power at his disposal.\"\n\nEira looks deeply into Matt's eyes then, her gaze almost pleading.\n\"Please be careful around such a one,\" she warns softly. \"Protect your own purity of heart and purpose.\"",
+      "timestamp": "2026-04-24T13:36:17.316616+00:00",
+      "is_kickoff": false,
+      "partial": false
+    },
+    {
+      "id": "msg_ddf90cd58047",
+      "role": "user",
+      "content": "How will I defend against one so powerful though?  I don't even have one thrall yet and I have no idea how to find my first.",
+      "timestamp": "2026-04-24T13:40:34.112988+00:00",
+      "is_kickoff": false,
+      "partial": false
+    },
+    {
+      "id": "msg_335bd1078d97",
+      "role": "assistant",
+      "content": "Matt nods solemnly at Eira's warning, feeling the weight of her words settle heavily upon his shoulders. He knows she speaks from a place of love and concern for him.\n\n\"I understand your worries,\" Matt says thoughtfully as he ponders her advice. \"But I have to face this powerful sorcerer eventually if I'm going to grow stronger and protect my future harem.\"\n\nHe looks down at the tome in his hands, running reverent fingers over its worn cover. Perhaps the answers he seeks lie within these pages.\n\n\"There must be ways for me to improve myself without resorting to questionable methods,\" Matt muses aloud. \"Maybe this book holds secrets about honing my Claiming abilities or discovering how to find suitable thralls who would choose me freely.\"\n\nMatt glances back up at Eira, seeking her guidance.\n\"Perhaps there are other Sex Sorcerers besides the one in Millfield that I could learn from first? Ones known for their wisdom and restraint?\" he suggests tentatively.\n\nEira smiles softly, nodding in approval at Matt's thoughtful approach. \"Indeed, dear boy,\" she agrees warmly. \"Wisdom is always a better teacher than raw power.\"\n\nShe thinks for a moment before continuing: \"There are whispers of a reclusive Sorceress named Lysandra living deep within the Whispering Woods to the north. It's said her teachings focus on balance and mutual devotion between Claimer and thrall.\" Eira's eyes glimmer with encouragement.\n\n\"However, it won't be an easy journey,\" she warns gently. \"The Whispering Woods are filled with ancient magic - some say it can drive men mad if they aren't careful.\"\n\nMatt sets his jaw determinedly as he considers this new path before him.\n\"I'll take all precautions necessary and trust in my instincts to guide me,\" he vows solemnly.\n\nEira smiles proudly, reaching out to squeeze Matt's shoulder reassuringly. \"That's the spirit I know and love in you, dear boy.\" She turns to rummage through a drawer nearby before handing him a small pouch of herbs.\n\n\"These are protection charms,\" she explains as she presses them into his palm. \"Keep them with you on your journey for added defense.\"\n\nMatt clasps Eira's hand gratefully between both of his own, feeling the love and support radiating from her touch.\n\"I won't let you down,\" he promises fervently before stepping back towards the door.\n\nWith a final nod to Eira and his great-grandmother's",
+      "timestamp": "2026-04-24T13:40:34.113007+00:00",
+      "is_kickoff": false,
+      "partial": true
+    },
+    {
+      "id": "msg_25e6f604d4b6",
+      "role": "user",
+      "content": "I stop by the local shop for travel supplies.  I inform the storekeeper of my intent to travel a distance and he helps me to choose travel items",
+      "timestamp": "2026-04-24T13:58:11.636619+00:00",
+      "is_kickoff": false,
+      "partial": false
+    },
+    {
+      "id": "msg_785f561f6f6e",
+      "role": "assistant",
+      "content": "Matt steps out of Eira's cottage, clutching her protection charms and the ancient tome close to his heart as he makes his way towards the village square where the local shop stands. The sun climbs higher in the sky now, its rays warming Matt's back through his cloak.\n\nThe shopkeeper, a jovial man named Gorm with a round belly and rosy cheeks, greets Matt with a wide grin as he enters.\n\"Well, well! Up early and eager to be off on an adventure, are we?\" Gorm booms jovially, eyeing the travel pack slung over Matt's shoulder. \"I can always spot a young sorcerer itching for new horizons!\"\n\nMatt smiles back at him, setting his items down on the weathered counter.\n\"Indeed I am,\" he agrees readily. \"Eira mentioned I should stock up on supplies before embarking to learn under wiser mentors than Willowdale has to offer.\"\n\nGorm nods sagely as he surveys Matt from head to toe, taking in the rusty sword at his hip and the determined set of his jaw.\n\"Aye, a wise choice indeed! Many a young sorcerer comes through here eager to make their mark on this world.\" He leans forward conspiratorially. \"Just between you and me... I've got a nose for adventure too.\"\n\nGorm busies himself rummaging under the counter before pulling out an assortment of items he lays out proudly - bedroll, water skins, flint and steel for starting fires, some dried rations like hardtack biscuits.\n\n\"This here's a sturdy traveler's pack,\" Gorm explains as Matt examines it approvingly. \"Should carry your belongings well enough even if you find yourself traipsing through those blasted Whispering Woods.\"\n\n\"Ah yes,\" Matt muses thoughtfully, \"Eira did mention something about that.\" He picks up the bedroll, testing its weight and bulk.\n\n\"And you'll be needing these too...\" Gorm adds, handing over a few more items with a wink. \"...For when you're not sleeping under the stars.\"\n\nMatt blushes slightly as he recognizes them - a set of silk sheets and scented oils meant to aid in intimate encounters.\n\"Ah... yes... thank you,\" Matt says hurriedly, tucking them discreetly into his pack.\n\nGorm chuckles heartily at Matt's flustered reaction. \"No need for embarrassment, young man! It comes with the The trade complete, Matt slings his newly stocked pack over one shoulder and heads towards the outskirts of Willowdale, a renewed sense of purpose filling his steps. The cobblestone path leads him past familiar landmarks - the old oak where he first discovered his Claiming abilities as a youth, the babbling brook where village children play on summer days.\n\nAs Matt reaches the edge of town, an unfamiliar figure comes into view. A hooded traveler leans against a gnarled tree, studying a worn map with furrowed brows. The stranger looks up as Matt approaches, revealing sharp features and piercing grey eyes that seem to appraise him coolly beneath their cowl.\n\n\"Hold,\" the traveler calls out in a commanding tone that hints at hidden power. \"You have the look of one setting forth on a journey.\" A gloved hand gestures towards Matt's pack and sword. \"Might I ask your destination?\"\n\nSomething about this stranger puts Matt slightly on edge, but he answers nonetheless.\n\"I intend to travel northward,\" Matt says, keeping his voice steady despite an instinctive wariness. \"I seek knowledge from the reclusive sorceress Lysandra in the Whispering Woods.\"\n\nThe corner of the stranger's mouth quirks up in a smirk that doesn't quite reach their eyes.\n\n\"Lysandra...\" they murmur, as if tasting the name on their tongue. \"A fool's errand, some would say. But perhaps not for one such as you.\" Their gaze rakes over Matt assessingly before dropping to his sword hilt once more.\n\nThe tension between them grows palpable as seconds tick by in silence. The stranger seems to be weighing something in their mind.\n\"Very well,\" they finally say, tucking away their map and pushing off from the tree trunk with an air of decision made. \"A word of advice then - keep your wits about you out there.\" A gloved hand brushes against Matt's sleeve briefly as they pass him on the path.\n\n\"I am Lysander,\" the stranger tosses back over one shoulder before disappearing around a bend, leaving Matt alone once more with his thoughts and the faint scent of ozone lingering in the air. Something tells him their paths may cross again... but for now, he must press onwards to Lysandra's forest abode.\n\nThe path stretches out before Matt, winding between hills and beneath dappled canopies as he marches ever northward under a sky strewn with wisps of cloud. An owl hoots in the distance",
+      "timestamp": "2026-04-24T13:58:11.636638+00:00",
+      "is_kickoff": false,
+      "partial": true
+    },
+    {
+      "id": "msg_901b98e4f759",
+      "role": "user",
+      "content": "I continue on my path, more wary now, following the general direction where Lysandra has been known to inhabit",
+      "timestamp": "2026-04-24T15:02:21.873051+00:00",
+      "is_kickoff": false,
+      "partial": false
+    },
+    {
+      "id": "msg_109bbae0dd65",
+      "role": "assistant",
+      "content": "Matt continues along the winding path leading into the Whispering Woods, his senses heightened and wariness amplified by the cryptic encounter with Lysander. The woods grow denser around him as he walks deeper, ancient trees stretching their gnarled branches overhead like grasping fingers.\n\nStrange whispers seem to echo through the dappled shadows cast by the foliage - snatches of inhuman voices that send a shiver down Matt's spine. He grips his sword hilt more tightly, keeping it loose in its sheath for quick draw should danger present itself.\n\nAs he rounds another bend, the path opens up into a small glade illuminated by shafting sunlight. In the center stands a peculiar stone structure: a ring of standing stones covered in twisting runes that pulse with an otherworldly energy. Matt approaches cautiously, feeling the hairs on his arms prickle with static.\n\nSuddenly, one of the runes flares brightly and a spectral figure materializes within the circle - a woman draped in gossamer robes, her features ethereal and translucent. She turns to face him with haunting violet eyes.\n\"Who dares trespass upon this sacred grove?\" Her voice resonates like tinkling bells yet carries an undercurrent of power.\n\nMatt swallows hard, bowing his head respectfully as he addresses the apparition.\n\"I am Matt,\" he replies steadily despite his racing heart. \"I come seeking guidance from the Sorceress Lysandra, to learn the true ways of Claiming and avoid the corruption that comes with unchecked power.\"\n\nThe specter studies him for a long moment before speaking again:\n\"You speak well, young one.\" She gestures around at the woods encroaching on their glade. \"These trees hold many secrets - both wondrous and perilous. I am Morwen, guardian of this threshold.\"\n\nMorwen steps closer to Matt until mere inches separate them, her translucent robes whispering like dead leaves. He feels an unseen pressure radiating from her form.\n\"Answer me true,\" she commands softly yet firmly. \"Are you prepared to leave behind everything you know and embrace a new path? One that will demand great sacrifice but offer rewards beyond mortal imagination?\"\n\nMatt meets Morwen's ghostly gaze, seeing the depth of ancient knowledge reflected in those violet depths. He knows he stands at a precipice - crossing this threshold means fully dedicating himself to becoming a true Sex Sorcerer.\n\n\"I... I believe so,\" Matt says, his voice unwavering even as uncertainty churns in",
+      "timestamp": "2026-04-24T15:02:21.873071+00:00",
+      "is_kickoff": false,
+      "partial": true
+    }
+  ],
+  "summaries": {
+    "short": "Born with the rare gift of Claiming, Matt has been training as a sorcerer since youth. Now, he sets out on an adventure to seek his first harem, increase his magical abilities, and confront rival Sex Sorcerers who mistreat their claimed thralls. His journey begins in Willowdale, where whispers of a powerful local sorcerer have drawn him to the nearby town.",
+    "chapters": [],
+    "arc": "",
+    "last_short_update_turn": 0,
+    "last_chapter_rollup_turn": 0
+  },
+  "side_effects": {
+    "msg_8c208be504e5": {
+      "memory_ids": [
+        "mem_3254d348d1eb"
+      ],
+      "reversal": {
+        "stats_changes": {
+          "Health": 1
+        },
+        "location_before": "Hill overlooking the village of Willowdale",
+        "inventory_to_remove": [],
+        "inventory_to_restore": [],
+        "npc_reversals": [
+          {
+            "name": "Villager",
+            "created": true,
+            "disposition_before": "Neutral"
+          }
+        ]
+      }
+    },
+    "msg_c2b4ff030b24": {
+      "memory_ids": [
+        "mem_25484ef53d15"
+      ],
+      "reversal": {
+        "stats_changes": {},
+        "location_before": null,
+        "inventory_to_remove": [],
+        "inventory_to_restore": [],
+        "npc_reversals": [
+          {
+            "name": "Eira",
+            "created": false,
+            "disposition_before": "Friendly"
+          }
+        ]
+      }
+    },
+    "msg_9df3d45e748f": {
+      "memory_ids": [
+        "mem_70a3c1e3a1e6"
+      ],
+      "reversal": {
+        "stats_changes": {},
+        "location_before": null,
+        "inventory_to_remove": [
+          "Old Tome"
+        ],
+        "inventory_to_restore": [],
+        "npc_reversals": [
+          {
+            "name": "Eira",
+            "created": false,
+            "disposition_before": "Suspicious"
+          }
+        ]
+      }
+    },
+    "msg_335bd1078d97": {
+      "memory_ids": [
+        "mem_410c72c0a2b4"
+      ],
+      "reversal": {
+        "stats_changes": {
+          "Gold": 1
+        },
+        "location_before": null,
+        "inventory_to_remove": [
+          "Protection Charms"
+        ],
+        "inventory_to_restore": [],
+        "npc_reversals": [
+          {
+            "name": "Eira",
+            "created": false
+          }
+        ]
+      }
+    },
+    "msg_785f561f6f6e": {
+      "memory_ids": [
+        "mem_a28a21aac46e"
+      ],
+      "reversal": {
+        "stats_changes": {
+          "Gold": 5
+        },
+        "location_before": null,
+        "inventory_to_remove": [
+          "Travel Pack",
+          "Bedroll",
+          "Water Skins",
+          "Flint and Steel",
+          "Dried Rations",
+          "Silk Sheets",
+          "Scented Oils"
+        ],
+        "inventory_to_restore": [],
+        "npc_reversals": [
+          {
+            "name": "Gorm",
+            "created": false,
+            "disposition_before": "Neutral"
+          }
+        ]
+      }
+    },
+    "msg_109bbae0dd65": {
+      "memory_ids": [
+        "mem_32b573b7304d"
+      ],
+      "reversal": {
+        "stats_changes": {
+          "Gold": 10
+        },
+        "location_before": "Millfield",
+        "inventory_to_remove": [
+          "Spectral Map"
+        ],
+        "inventory_to_restore": [],
+        "npc_reversals": [
+          {
+            "name": "Morwen",
+            "created": true,
+            "disposition_before": "Neutral"
+          }
+        ]
+      }
+    }
+  },
+  "stat_bounds": {
+    "Health": {
+      "min": 0,
+      "max": 9999
+    },
+    "Gold": {
+      "min": 0,
+      "max": 9999
+    }
+  },
+  "sampling_overrides": {
+    "temperature": null,
+    "repeat_penalty": null,
+    "top_p": null,
+    "top_k": null,
+    "min_p": null,
+    "num_predict": null
+  }
+}
