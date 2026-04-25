@@ -1,8 +1,7 @@
-import { createContext, useCallback, useContext, useEffect, useState } from 'react';
+import { useCallback, useMemo, useState } from 'react';
+import BannerContext from '../contexts/BannerContext';
 
-const BannerContext = createContext(null);
-
-export function BannerProvider({ children }) {
+export default function BannerProvider({ children }) {
   const [banners, setBanners] = useState([]);
 
   const remove = useCallback((id) => {
@@ -16,12 +15,12 @@ export function BannerProvider({ children }) {
     return id;
   }, [remove]);
 
-  const api = {
+  const api = useMemo(() => ({
     error: (m, opts) => push('error', m, opts),
     warn: (m, opts) => push('warn', m, opts),
     info: (m, opts) => push('info', m, opts),
     dismiss: remove
-  };
+  }), [push, remove]);
 
   return (
     <BannerContext.Provider value={api}>
@@ -37,16 +36,10 @@ export function BannerProvider({ children }) {
             }`}
           >
             <span className="flex-1">{b.message}</span>
-            <button onClick={() => remove(b.id)} className="text-white/70 hover:text-white">×</button>
+            <button onClick={() => remove(b.id)} className="text-white/70 hover:text-white">x</button>
           </div>
         ))}
       </div>
     </BannerContext.Provider>
   );
-}
-
-export function useBanner() {
-  const ctx = useContext(BannerContext);
-  if (!ctx) throw new Error('useBanner must be used inside BannerProvider');
-  return ctx;
 }

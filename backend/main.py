@@ -24,6 +24,7 @@ from fastapi.responses import JSONResponse, StreamingResponse
 from pydantic import BaseModel, Field
 
 import extraction
+import game_rules
 import memory
 import prompt_builder
 import state_manager
@@ -119,6 +120,16 @@ class GenerateWorldRequest(BaseModel):
     model: str | None = None
 
 
+class DirectorPatchRequest(BaseModel):
+    expected_revision: int | None = None
+    player: dict[str, Any] | None = None
+    stats: dict[str, int] | None = None
+    inventory: list[str] | None = None
+    npcs: list[dict[str, Any]] | None = None
+    lorebook: dict[str, str] | None = None
+    stat_bounds: dict[str, Any] | None = None
+
+
 # ---------------------------------------------------------------------------
 # Root / diagnostics
 # ---------------------------------------------------------------------------
@@ -186,6 +197,7 @@ async def init_campaign(req: InitCampaignRequest):
     )
     if req.story_summary:
         state.summaries.short = req.story_summary
+    state_manager.record_event(state, "campaign.init", "Campaign created.")
 
     await state_manager.save_state(state)
     return {"status": "success", "campaign_id": req.campaign_id}
@@ -229,6 +241,50 @@ async def override_state(campaign_id: str, body: dict):
     return {"status": "success"}
 
 
+@app.patch("/api/state/{campaign_id}")
+async def patch_state(campaign_id: str, req: DirectorPatchRequest):
+    """Narrow Director-mode patch with optimistic revision checking."""
+    campaign_id_ctx.set(campaign_id)
+
+    async def _apply(state: CampaignState) -> CampaignState:
+        if req.expected_revision is not None and state.revision != req.expected_revision:
+            raise HTTPException(409, {
+                "message": "campaign state changed; refresh before applying this edit",
+                "current_revision": state.revision,
+            })
+
+        if req.player is not None:
+            if "name" in req.player:
+                state.player.name = str(req.player["name"])
+            if "location" in req.player:
+                state.player.location = str(req.player["location"])
+
+        if req.stats is not None:
+            state.player.stats.update({str(k): int(v) for k, v in req.stats.items()})
+
+        if req.inventory is not None:
+            state.player.inventory = [str(item) for item in req.inventory if str(item).strip()]
+
+        if req.npcs is not None:
+            state.npcs = [NPC.model_validate(n) for n in req.npcs]
+
+        if req.lorebook is not None:
+            state.lorebook = {str(k): str(v) for k, v in req.lorebook.items() if str(k).strip()}
+
+        if req.stat_bounds is not None:
+            state.stat_bounds = {
+                str(k): StatBound.model_validate(v) for k, v in req.stat_bounds.items()
+            }
+
+        state_manager.record_event(state, "director.patch", "Director-mode state patch applied.")
+        return state
+
+    new_state = await state_manager.mutate_state(campaign_id, _apply)
+    if new_state is None:
+        raise HTTPException(404, "campaign not found")
+    return {"status": "success", "state": new_state.model_dump(mode="json")}
+
+
 @app.post("/api/campaigns/{campaign_id}/fork")
 async def fork_campaign(campaign_id: str):
     campaign_id_ctx.set(campaign_id)
@@ -264,125 +320,160 @@ async def _background_after_turn(
     """Save vector memory, run extraction + reversal tagging, run summarizer cadence."""
     campaign_id_ctx.set(campaign_id)
 
-    mem_content = f"Player acted: {user_action}\nGM narrated: {gm_text}"
+    gm_excerpt = gm_text.strip()
+    if len(gm_excerpt) > 900:
+        gm_excerpt = gm_excerpt[:900].rsplit(" ", 1)[0] + " [truncated]"
+    mem_content = f"Event memory\nPlayer action: {user_action}\nOutcome: {gm_excerpt}"
 
     async def _apply(state: CampaignState) -> CampaignState:
-        mem_id = memory.add_memory(campaign_id, gm_msg_id, mem_content, turn=len(state.messages))
         side = state.side_effects.setdefault(gm_msg_id, MessageSideEffects())
-        side.memory_ids.append(mem_id)
+        side.status = "pending"
+        side.error = ""
 
-        delta = await extraction.extract_state_changes(state, user_action, gm_text)
-        reversal_dict = state_manager.apply_state_delta(state, delta)
-        side.reversal = ReversalPatch.model_validate(reversal_dict)
+        try:
+            mem_id = memory.add_memory(
+                campaign_id,
+                gm_msg_id,
+                mem_content,
+                turn=len(state.messages),
+                kind="event",
+                location=state.player.location,
+            )
+            side.memory_ids.append(mem_id)
 
-        await summarizer.maybe_summarize(state)
+            delta = await extraction.extract_state_changes(state, user_action, gm_text)
+            reversal_dict = state_manager.apply_state_delta(state, delta)
+            side.reversal = ReversalPatch.model_validate(reversal_dict)
+
+            await summarizer.maybe_summarize(state)
+            side.status = "complete"
+            state_manager.record_event(state, "turn.postprocess.complete", f"Post-turn updates complete for {gm_msg_id}.")
+        except Exception as e:
+            side.status = "failed"
+            side.error = str(e)
+            state_manager.record_event(state, "turn.postprocess.failed", f"Post-turn updates failed for {gm_msg_id}: {e}")
+            log.exception("Post-turn work failed for msg=%s", gm_msg_id)
         return state
 
-    try:
-        await state_manager.mutate_state(campaign_id, _apply)
-    except Exception:
-        log.exception("Background post-turn work failed for msg=%s", gm_msg_id)
+    await state_manager.mutate_state(campaign_id, _apply)
 
 
 async def _run_chat_stream(
-    state: CampaignState,
+    campaign_id: str,
     user_message: str | None,
     is_kickoff: bool,
     overrides: SamplingOverrides | None,
 ) -> AsyncGenerator[bytes, None]:
-    # Build prompt + window from live state.
-    query_for_memory = user_message or "Begin the scene."
-    memories = memory.retrieve_relevant_memories(state.campaign_id, query_for_memory, n_results=4)
-    built = prompt_builder.build_prompt(
-        state=state,
-        user_message=user_message,
-        retrieved_memories=memories,
-    )
-    _LAST_PROMPT[state.campaign_id] = {
-        "system_prompt": built.system_prompt,
-        "stats": built.stats.model_dump(),
-        "memories": memories,
-        "timestamp": datetime.now(timezone.utc).isoformat(),
-    }
+    async with state_manager.turn_lock(campaign_id):
+        state = await state_manager.load_state(campaign_id)
+        if state is None:
+            yield _sse_pack({"type": "error", "data": "campaign not found"})
+            yield _sse_pack({"type": "done", "stop_reason": "error"})
+            return
 
-    yield _sse_pack({"type": "start", "stats": built.stats.model_dump()})
-
-    buf: list[str] = []
-    stop_reason = "stop"
-    error: str | None = None
-    cancelled = False
-
-    try:
-        async for event in stream_chat(
-            built.messages,
-            model=state.models.gm,
-            overrides=overrides or state.sampling_overrides,
-        ):
-            et = event.get("type")
-            if et == "token":
-                chunk = event["data"]
-                buf.append(chunk)
-                yield _sse_pack({"type": "token", "data": chunk})
-            elif et == "error":
-                error = event.get("data") or "unknown error"
-                yield _sse_pack({"type": "error", "data": error})
-            elif et == "done":
-                stop_reason = event.get("stop_reason", "stop")
-    except asyncio.CancelledError:
-        # Client disconnect (C1 stop button). Persist the partial and exit
-        # the generator without re-raising so starlette cleans up cleanly.
-        stop_reason = "cancelled"
-        cancelled = True
-
-    gm_text = "".join(buf).strip()
-
-    if not gm_text and error:
-        # Nothing narrated — error already sent. Don't pollute history.
-        yield _sse_pack({"type": "done", "stop_reason": "error"})
-        return
-
-    partial = stop_reason in ("cancelled", "length") or (error is not None and bool(gm_text))
-
-    async def _persist(st: CampaignState) -> CampaignState:
-        import schema as _schema
-        if user_message is not None:
-            st.messages.append(_schema.Message(
-                role=Role.USER,
-                content=user_message,
-                is_kickoff=is_kickoff,
-            ))
-        gm_msg = _schema.Message(
-            role=Role.ASSISTANT,
-            content=gm_text,
-            partial=partial,
-            is_kickoff=is_kickoff,
+        # Build prompt + window from the freshest state after acquiring the turn lock.
+        query_for_memory = user_message or "Begin the scene."
+        memories = memory.retrieve_relevant_memories(campaign_id, query_for_memory, n_results=4)
+        action_resolution = game_rules.resolve_action(state, user_message or "")
+        turn_context = game_rules.render_resolution(action_resolution)
+        built = prompt_builder.build_prompt(
+            state=state,
+            user_message=user_message,
+            retrieved_memories=memories,
+            turn_context=turn_context,
         )
-        st.messages.append(gm_msg)
-        st.side_effects.setdefault(gm_msg.id, MessageSideEffects())
-        return st
+        _LAST_PROMPT[campaign_id] = {
+            "system_prompt": built.system_prompt,
+            "stats": built.stats.model_dump(),
+            "memories": memories,
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+        }
 
-    new_state = await state_manager.mutate_state(state.campaign_id, _persist)
+        yield _sse_pack({
+            "type": "start",
+            "stats": built.stats.model_dump(),
+            "action_resolution": action_resolution.model_dump() if action_resolution else None,
+        })
 
-    gm_msg_id: str | None = None
-    if new_state is not None:
-        gm_msg_id = new_state.messages[-1].id
-        if gm_text and not cancelled:
-            asyncio.create_task(
-                _background_after_turn(
-                    campaign_id=state.campaign_id,
+        buf: list[str] = []
+        stop_reason = "stop"
+        error: str | None = None
+        cancelled = False
+
+        try:
+            async for event in stream_chat(
+                built.messages,
+                model=state.models.gm,
+                overrides=overrides or state.sampling_overrides,
+            ):
+                et = event.get("type")
+                if et == "token":
+                    chunk = event["data"]
+                    buf.append(chunk)
+                    yield _sse_pack({"type": "token", "data": chunk})
+                elif et == "error":
+                    error = event.get("data") or "unknown error"
+                    yield _sse_pack({"type": "error", "data": error})
+                elif et == "done":
+                    stop_reason = event.get("stop_reason", "stop")
+        except asyncio.CancelledError:
+            # Client disconnect (C1 stop button). Persist the partial and exit
+            # the generator without re-raising so starlette cleans up cleanly.
+            stop_reason = "cancelled"
+            cancelled = True
+
+        gm_text = "".join(buf).strip()
+
+        if not gm_text and error:
+            # Nothing narrated — error already sent. Don't pollute history.
+            yield _sse_pack({"type": "done", "stop_reason": "error"})
+            return
+
+        partial = stop_reason in ("cancelled", "length") or (error is not None and bool(gm_text))
+        turn_id = f"turn_{uuid.uuid4().hex[:12]}"
+
+        async def _persist(st: CampaignState) -> CampaignState:
+            import schema as _schema
+            if user_message is not None:
+                st.messages.append(_schema.Message(
+                    turn_id=turn_id,
+                    role=Role.USER,
+                    content=user_message,
+                    is_kickoff=is_kickoff,
+                ))
+            gm_msg = _schema.Message(
+                turn_id=turn_id,
+                role=Role.ASSISTANT,
+                content=gm_text,
+                partial=partial,
+                is_kickoff=is_kickoff,
+            )
+            st.messages.append(gm_msg)
+            st.side_effects.setdefault(gm_msg.id, MessageSideEffects(status="skipped" if cancelled else "pending"))
+            state_manager.record_event(st, "turn.stream.complete", f"GM message {gm_msg.id} saved with stop_reason={stop_reason}.")
+            return st
+
+        new_state = await state_manager.mutate_state(campaign_id, _persist)
+
+        gm_msg_id: str | None = None
+        if new_state is not None:
+            gm_msg_id = new_state.messages[-1].id
+            if gm_text and not cancelled:
+                await _background_after_turn(
+                    campaign_id=campaign_id,
                     user_action=user_message or "",
                     gm_msg_id=gm_msg_id,
                     gm_text=gm_text,
                 )
-            )
 
-    yield _sse_pack({
-        "type": "done",
-        "stop_reason": stop_reason,
-        "prompt_stats": built.stats.model_dump(),
-        "partial": partial,
-        "gm_msg_id": gm_msg_id,
-    })
+        yield _sse_pack({
+            "type": "done",
+            "stop_reason": stop_reason,
+            "prompt_stats": built.stats.model_dump(),
+            "partial": partial,
+            "gm_msg_id": gm_msg_id,
+            "turn_id": turn_id,
+        })
 
 
 @app.post("/api/chat/stream", dependencies=[Depends(chat_rate_limit)])
@@ -394,7 +485,7 @@ async def chat_stream(req: ChatRequest):
 
     return StreamingResponse(
         _run_chat_stream(
-            state=state,
+            campaign_id=req.campaign_id,
             user_message=req.user_message,
             is_kickoff=False,
             overrides=req.overrides,
@@ -421,7 +512,7 @@ async def kickoff_campaign(campaign_id: str):
 
     return StreamingResponse(
         _run_chat_stream(
-            state=state,
+            campaign_id=campaign_id,
             user_message=kickoff_prompt,
             is_kickoff=True,
             overrides=None,
@@ -451,43 +542,63 @@ async def continue_chat(campaign_id: str):
     )
 
     async def _gen() -> AsyncGenerator[bytes, None]:
-        memories = memory.retrieve_relevant_memories(campaign_id, last_gm.content, n_results=3)
-        built = prompt_builder.build_prompt(
-            state=state,
-            user_message=continue_prompt,
-            retrieved_memories=memories,
-        )
-        yield _sse_pack({"type": "start", "stats": built.stats.model_dump()})
+        async with state_manager.turn_lock(campaign_id):
+            fresh = await state_manager.load_state(campaign_id)
+            if fresh is None:
+                yield _sse_pack({"type": "error", "data": "campaign not found"})
+                yield _sse_pack({"type": "done", "stop_reason": "error"})
+                return
 
-        buf: list[str] = []
-        stop_reason = "stop"
-        async for event in stream_chat(built.messages, model=state.models.gm):
-            et = event.get("type")
-            if et == "token":
-                buf.append(event["data"])
-                yield _sse_pack({"type": "token", "data": event["data"]})
-            elif et == "error":
-                yield _sse_pack({"type": "error", "data": event.get("data", "error")})
-            elif et == "done":
-                stop_reason = event.get("stop_reason", "stop")
+            fresh_last_gm = next((m for m in reversed(fresh.messages) if m.role == Role.ASSISTANT), None)
+            if fresh_last_gm is None:
+                yield _sse_pack({"type": "error", "data": "no assistant message to continue"})
+                yield _sse_pack({"type": "done", "stop_reason": "error"})
+                return
 
-        appended = "".join(buf).strip()
-        if appended:
-            async def _apply(st: CampaignState) -> CampaignState:
-                for m in reversed(st.messages):
-                    if m.role == Role.ASSISTANT:
-                        separator = "" if m.content.endswith(("\n", " ")) else " "
-                        m.content = m.content + separator + appended
-                        m.partial = stop_reason in ("cancelled", "length")
-                        break
-                return st
-            await state_manager.mutate_state(campaign_id, _apply)
+            memories = memory.retrieve_relevant_memories(campaign_id, fresh_last_gm.content, n_results=3)
+            built = prompt_builder.build_prompt(
+                state=fresh,
+                user_message=continue_prompt,
+                retrieved_memories=memories,
+            )
+            _LAST_PROMPT[campaign_id] = {
+                "system_prompt": built.system_prompt,
+                "stats": built.stats.model_dump(),
+                "memories": memories,
+                "timestamp": datetime.now(timezone.utc).isoformat(),
+            }
+            yield _sse_pack({"type": "start", "stats": built.stats.model_dump()})
 
-        yield _sse_pack({
-            "type": "done",
-            "stop_reason": stop_reason,
-            "appended_chars": len(appended),
-        })
+            buf: list[str] = []
+            stop_reason = "stop"
+            async for event in stream_chat(built.messages, model=fresh.models.gm):
+                et = event.get("type")
+                if et == "token":
+                    buf.append(event["data"])
+                    yield _sse_pack({"type": "token", "data": event["data"]})
+                elif et == "error":
+                    yield _sse_pack({"type": "error", "data": event.get("data", "error")})
+                elif et == "done":
+                    stop_reason = event.get("stop_reason", "stop")
+
+            appended = "".join(buf).strip()
+            if appended:
+                async def _apply(st: CampaignState) -> CampaignState:
+                    for m in reversed(st.messages):
+                        if m.role == Role.ASSISTANT:
+                            separator = "" if m.content.endswith(("\n", " ")) else " "
+                            m.content = m.content + separator + appended
+                            m.partial = stop_reason in ("cancelled", "length")
+                            break
+                    return st
+                await state_manager.mutate_state(campaign_id, _apply)
+
+            yield _sse_pack({
+                "type": "done",
+                "stop_reason": stop_reason,
+                "prompt_stats": built.stats.model_dump(),
+                "appended_chars": len(appended),
+            })
 
     return StreamingResponse(_gen(), media_type="application/x-ndjson")
 
@@ -502,13 +613,27 @@ async def delete_message(campaign_id: str, msg_id: str):
     campaign_id_ctx.set(campaign_id)
 
     async def _apply(state: CampaignState) -> CampaignState:
-        side = state.side_effects.get(msg_id)
-        if side:
-            state_manager.apply_reversal(state, side.reversal.model_dump())
-            if side.memory_ids:
-                memory.delete_memories_for_message(campaign_id, side.memory_ids)
-            state.side_effects.pop(msg_id, None)
-        state.messages = [m for m in state.messages if m.id != msg_id]
+        target_index = next((i for i, m in enumerate(state.messages) if m.id == msg_id), -1)
+        if target_index < 0:
+            return state
+
+        target = state.messages[target_index]
+        if target.turn_id:
+            remove_ids = {m.id for m in state.messages if m.turn_id == target.turn_id}
+        elif target.role == Role.ASSISTANT and target_index > 0 and state.messages[target_index - 1].role == Role.USER:
+            remove_ids = {state.messages[target_index - 1].id, target.id}
+        else:
+            remove_ids = {target.id}
+
+        for removed_id in list(remove_ids):
+            side = state.side_effects.get(removed_id)
+            if side:
+                state_manager.apply_reversal(state, side.reversal.model_dump())
+                if side.memory_ids:
+                    memory.delete_memories_for_message(campaign_id, side.memory_ids)
+                state.side_effects.pop(removed_id, None)
+
+        state.messages = [m for m in state.messages if m.id not in remove_ids]
         return state
 
     new_state = await state_manager.mutate_state(campaign_id, _apply)
@@ -539,18 +664,27 @@ async def regenerate_message(campaign_id: str, msg_id: str):
 
     # Delete the target (and its user counterpart, which we'll re-send).
     async def _prune(st: CampaignState) -> CampaignState:
-        side = st.side_effects.get(msg_id)
-        if side:
-            state_manager.apply_reversal(st, side.reversal.model_dump())
-            if side.memory_ids:
-                memory.delete_memories_for_message(campaign_id, side.memory_ids)
-            st.side_effects.pop(msg_id, None)
-        # Remove the target assistant message AND the user message that preceded it.
         idx = next((i for i, m in enumerate(st.messages) if m.id == msg_id), -1)
-        if idx > 0 and st.messages[idx - 1].role == Role.USER:
-            del st.messages[idx - 1:idx + 1]
+        if idx < 0:
+            return st
+
+        target = st.messages[idx]
+        if target.turn_id:
+            remove_ids = {m.id for m in st.messages if m.turn_id == target.turn_id}
+        elif idx > 0 and st.messages[idx - 1].role == Role.USER:
+            remove_ids = {st.messages[idx - 1].id, target.id}
         else:
-            del st.messages[idx]
+            remove_ids = {target.id}
+
+        for removed_id in list(remove_ids):
+            side = st.side_effects.get(removed_id)
+            if side:
+                state_manager.apply_reversal(st, side.reversal.model_dump())
+                if side.memory_ids:
+                    memory.delete_memories_for_message(campaign_id, side.memory_ids)
+                st.side_effects.pop(removed_id, None)
+
+        st.messages = [m for m in st.messages if m.id not in remove_ids]
         return st
 
     pruned = await state_manager.mutate_state(campaign_id, _prune)
@@ -559,7 +693,7 @@ async def regenerate_message(campaign_id: str, msg_id: str):
 
     return StreamingResponse(
         _run_chat_stream(
-            state=pruned,
+            campaign_id=campaign_id,
             user_message=prev_user,
             is_kickoff=False,
             overrides=None,
@@ -618,6 +752,27 @@ async def get_last_prompt(campaign_id: str):
     if campaign_id not in _LAST_PROMPT:
         return {"available": False}
     return {"available": True, **_LAST_PROMPT[campaign_id]}
+
+
+@app.get("/api/campaign/{campaign_id}/debug")
+async def get_debug_bundle(campaign_id: str):
+    campaign_id_ctx.set(campaign_id)
+    state = await state_manager.load_state(campaign_id)
+    if state is None:
+        raise HTTPException(404, "campaign not found")
+
+    memory_count = 0
+    with suppress(Exception):
+        memory_count = memory.get_collection(campaign_id).count()
+
+    return {
+        "schema_version": SCHEMA_VERSION,
+        "campaign_id": campaign_id,
+        "state": state.model_dump(mode="json"),
+        "last_prompt": _LAST_PROMPT.get(campaign_id),
+        "memory_count": memory_count,
+        "recent_events": [e.model_dump(mode="json") for e in state.events[-25:]],
+    }
 
 
 # ---------------------------------------------------------------------------

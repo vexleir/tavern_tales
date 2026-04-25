@@ -26,6 +26,14 @@ def _section(title: str, body: str) -> str:
     return f"[{title}]\n{body}\n[/{title}]"
 
 
+def _truncate_to_tokens(text: str, max_tokens: int) -> str:
+    if count_tokens(text) <= max_tokens:
+        return text
+    max_chars = max(200, max_tokens * 4)
+    clipped = text[:max_chars].rsplit("\n", 1)[0].strip() or text[:max_chars].strip()
+    return f"{clipped}\n[truncated to fit prompt budget]"
+
+
 def _render_protagonist(state: CampaignState) -> str:
     p = state.player
     stats = ", ".join(f"{k}: {v}" for k, v in p.stats.items()) or "(none)"
@@ -67,6 +75,28 @@ def _render_chapters(state: CampaignState, max_chapters: int = 3) -> str:
     )
 
 
+def _render_quests(state: CampaignState) -> str:
+    active = [q for q in state.quests if q.status == "active"]
+    if not active:
+        return ""
+    lines: list[str] = []
+    for quest in active:
+        lines.append(f"- {quest.title}")
+        for obj in quest.objectives:
+            mark = "done" if obj.complete else "open"
+            lines.append(f"    [{mark}] {obj.text}")
+    return "\n".join(lines)
+
+
+def _render_conditions(state: CampaignState) -> str:
+    if not state.conditions:
+        return ""
+    return "\n".join(
+        f"- {c.name} ({c.severity}, {c.duration})" + (f" from {c.source}" if c.source else "")
+        for c in state.conditions
+    )
+
+
 def _render_memories(memories: list[dict]) -> str:
     if not memories:
         return ""
@@ -104,13 +134,16 @@ def _build_system_prompt(
     state: CampaignState,
     memories: list[dict],
     window_msg_contents: list[str],
+    turn_context: str = "",
 ) -> tuple[str, BlockTokens]:
     tokens = BlockTokens()
     parts: list[str] = []
 
     # 1. Role rules (always present)
-    parts.append(ROLE_RULES)
-    tokens.role_rules = count_tokens(ROLE_RULES)
+    length_note = f"Campaign pacing preference: {state.rules.response_length} responses."
+    role_rules = f"{ROLE_RULES}\n{length_note}"
+    parts.append(role_rules)
+    tokens.role_rules = count_tokens(role_rules)
 
     # 2. World
     if state.world_description.strip():
@@ -133,7 +166,7 @@ def _build_system_prompt(
     tokens.protagonist = count_tokens(s)
 
     # 5. Cast
-    body = _render_cast(state)
+    body = _truncate_to_tokens(_render_cast(state), 900)
     s = _section("CAST", body)
     parts.append(s)
     tokens.cast = count_tokens(s)
@@ -141,6 +174,7 @@ def _build_system_prompt(
     # 6. Lorebook — ALL entries, not keyword-filtered (audit §1.6)
     lb = _render_lorebook(state)
     if lb:
+        lb = _truncate_to_tokens(lb, 1200)
         s = _section("LOREBOOK (absolute rules — honor them)", lb)
         parts.append(s)
         tokens.lorebook = count_tokens(s)
@@ -164,10 +198,29 @@ def _build_system_prompt(
         parts.append(s)
         tokens.short_summary = count_tokens(s)
 
+    # Active game systems
+    quests = _render_quests(state)
+    if quests:
+        s = _section("ACTIVE QUESTS", quests)
+        parts.append(s)
+        tokens.quests = count_tokens(s)
+
+    conditions = _render_conditions(state)
+    if conditions:
+        s = _section("ACTIVE CONDITIONS", conditions)
+        parts.append(s)
+        tokens.conditions = count_tokens(s)
+
+    if turn_context.strip():
+        s = _section("ACTION RESOLUTION (binding)", turn_context.strip())
+        parts.append(s)
+        tokens.action_resolution = count_tokens(s)
+
     # 10. Retrieved memories (deduped)
     filtered = _dedupe_memories_against_window(memories, window_msg_contents)
     mem = _render_memories(filtered)
     if mem:
+        mem = _truncate_to_tokens(mem, 1200)
         s = _section("RELEVANT PAST MEMORIES", mem)
         parts.append(s)
         tokens.memories = count_tokens(s)
@@ -203,6 +256,7 @@ def build_prompt(
     state: CampaignState,
     user_message: str | None,
     retrieved_memories: list[dict] | None = None,
+    turn_context: str = "",
     response_budget: int = 512,
     system_reserve: int = 1500,
 ) -> BuiltPrompt:
@@ -223,7 +277,12 @@ def build_prompt(
     window = _select_window(state, window_budget)
     window_contents = [m["content"] for m in window]
 
-    system_text, block_tokens = _build_system_prompt(state, retrieved_memories, window_contents)
+    system_text, block_tokens = _build_system_prompt(
+        state,
+        retrieved_memories,
+        window_contents,
+        turn_context=turn_context,
+    )
 
     messages: list[dict[str, str]] = [{"role": "system", "content": system_text}]
     messages.extend(window)

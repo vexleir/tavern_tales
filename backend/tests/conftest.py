@@ -34,6 +34,7 @@ def temp_state_dir(tmp_path, monkeypatch):
     monkeypatch.setattr(state_manager, "LEGACY_FILE", tmp_path / "campaign_states.json")
     monkeypatch.setattr(state_manager, "_migration_checked", False)
     monkeypatch.setattr(state_manager, "_locks", {})
+    monkeypatch.setattr(state_manager, "_turn_locks", {})
     (tmp_path / "states").mkdir(parents=True, exist_ok=True)
     return tmp_path
 

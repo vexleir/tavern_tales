@@ -9,11 +9,14 @@ import memory
 
 
 def test_add_and_retrieve_roundtrip(temp_chroma):
-    memory.add_memory("camp_a", msg_id="msg_1", content="The raven circled overhead.", turn=1)
+    memory.add_memory("camp_a", msg_id="msg_1", content="The raven circled overhead.", turn=1, kind="event", location="Tower")
     memory.add_memory("camp_a", msg_id="msg_2", content="Dragons sleep in the mountain.", turn=2)
     results = memory.retrieve_relevant_memories("camp_a", query="raven", n_results=2)
     docs = [r["document"] for r in results]
     assert any("raven" in d for d in docs)
+    raven = next(r for r in results if "raven" in r["document"])
+    assert raven["metadata"]["kind"] == "event"
+    assert raven["metadata"]["location"] == "Tower"
 
 
 def test_campaigns_are_isolated(temp_chroma):

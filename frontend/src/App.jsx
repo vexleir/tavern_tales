@@ -1,25 +1,31 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import CampaignCreator from './CampaignCreator';
-import { ModalProvider, useModal } from './components/Modal';
-import { BannerProvider, useBanner } from './components/Banner';
+import BannerProvider from './components/BannerProvider';
+import ModalProvider from './components/ModalProvider';
+import useBanner from './hooks/useBanner';
+import useModal from './hooks/useModal';
+import useNdjsonStream from './hooks/useNdjsonStream';
+import { apiUrl } from './lib/api';
 
-const API_BASE = 'http://localhost:8000';
+const createCampaignId = () => `campaign_${Date.now()}`;
 
 function AppInner() {
   const [appMode, setAppMode] = useState('menu');
-  const [activeCampaignId, setActiveCampaignId] = useState(`campaign_${Date.now()}`);
+  const [activeCampaignId, setActiveCampaignId] = useState(() => createCampaignId());
   const [campaignState, setCampaignState] = useState(null);
   const [messages, setMessages] = useState([]);
   const [input, setInput] = useState('');
-  const [isStreaming, setIsStreaming] = useState(false);
   const [directorMode, setDirectorMode] = useState(false);
   const [savedCampaigns, setSavedCampaigns] = useState([]);
   const [promptStats, setPromptStats] = useState(null);
   const [lastPrompt, setLastPrompt] = useState(null);
+  const [lastResolution, setLastResolution] = useState(null);
   const [undoStack, setUndoStack] = useState([]);
   const [inspectorOpen, setInspectorOpen] = useState(false);
+  const [sidebarOpen, setSidebarOpen] = useState(false);
+  const [newLoreKey, setNewLoreKey] = useState('');
+  const [newLoreRule, setNewLoreRule] = useState('');
 
-  const abortRef = useRef(null);
   const modal = useModal();
   const banner = useBanner();
 
@@ -27,7 +33,7 @@ function AppInner() {
 
   const refreshState = useCallback(async (id) => {
     try {
-      const res = await fetch(`${API_BASE}/api/state/${id}`);
+      const res = await fetch(apiUrl(`/api/state/${id}`));
       if (!res.ok) return null;
       const data = await res.json();
       setCampaignState(data);
@@ -40,70 +46,26 @@ function AppInner() {
     }
   }, [banner]);
 
+  const { isStreaming, streamEndpoint, stop: handleStop } = useNdjsonStream({
+    onError: banner.error,
+    onAbortWithTokens: () => refreshState(activeCampaignId)
+  });
+
   useEffect(() => {
     if (appMode === 'menu') {
-      fetch(`${API_BASE}/api/campaigns`)
+      fetch(apiUrl('/api/campaigns'))
         .then(r => r.json())
         .then(setSavedCampaigns)
         .catch(e => banner.error(`Could not list campaigns: ${e.message}`));
     }
   }, [appMode, banner]);
 
-  // -------------------------------------------------------- streaming
-
-  const streamEndpoint = async (url, body, { onStart, onToken, onDone } = {}) => {
-    setIsStreaming(true);
-    abortRef.current = new AbortController();
-    try {
-      const res = await fetch(`${API_BASE}${url}`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: body ? JSON.stringify(body) : undefined,
-        signal: abortRef.current.signal
-      });
-      if (!res.ok) {
-        const errBody = await res.json().catch(() => ({ detail: res.statusText }));
-        banner.error(`Backend error: ${errBody.detail || res.statusText}`);
-        setIsStreaming(false);
-        return;
-      }
-      const reader = res.body.getReader();
-      const decoder = new TextDecoder('utf-8');
-      let tail = '';
-      while (true) {
-        const { value, done } = await reader.read();
-        if (done) break;
-        tail += decoder.decode(value, { stream: true });
-        const lines = tail.split('\n');
-        tail = lines.pop();
-        for (const line of lines) {
-          if (!line.trim()) continue;
-          let evt;
-          try { evt = JSON.parse(line); } catch { continue; }
-          if (evt.type === 'start' && onStart) onStart(evt);
-          else if (evt.type === 'token' && onToken) onToken(evt.data);
-          else if (evt.type === 'error') banner.error(evt.data);
-          else if (evt.type === 'done' && onDone) onDone(evt);
-        }
-      }
-    } catch (e) {
-      if (e.name !== 'AbortError') banner.error(`Stream failure: ${e.message}`);
-    } finally {
-      setIsStreaming(false);
-      abortRef.current = null;
-    }
-  };
-
-  const handleStop = () => {
-    if (abortRef.current) abortRef.current.abort();
-  };
-
   // -------------------------------------------------------- kickoff / send
 
   const handleKickoff = async (id) => {
     setMessages([{ role: 'assistant', content: '', id: 'temp_kickoff' }]);
     await streamEndpoint(`/api/campaign/${id}/kickoff`, null, {
-      onStart: (evt) => setPromptStats(evt.stats),
+      onStart: (evt) => { setPromptStats(evt.stats); setLastResolution(null); },
       onToken: (t) => setMessages(prev => {
         const copy = [...prev];
         copy[copy.length - 1] = { ...copy[copy.length - 1], content: copy[copy.length - 1].content + t };
@@ -127,7 +89,10 @@ function AppInner() {
       campaign_id: activeCampaignId,
       user_message: userText
     }, {
-      onStart: (evt) => setPromptStats(evt.stats),
+      onStart: (evt) => {
+        setPromptStats(evt.stats);
+        setLastResolution(evt.action_resolution || null);
+      },
       onToken: (t) => setMessages(prev => {
         const copy = [...prev];
         copy[copy.length - 1] = { ...copy[copy.length - 1], content: copy[copy.length - 1].content + t };
@@ -143,7 +108,7 @@ function AppInner() {
   const handleContinue = async () => {
     setMessages(prev => [...prev]);
     await streamEndpoint(`/api/campaign/${activeCampaignId}/continue`, null, {
-      onStart: (evt) => setPromptStats(evt.stats),
+      onStart: (evt) => { setPromptStats(evt.stats); setLastResolution(null); },
       onToken: (t) => setMessages(prev => {
         const copy = [...prev];
         const last = copy[copy.length - 1];
@@ -166,7 +131,10 @@ function AppInner() {
       return copy;
     });
     await streamEndpoint(`/api/campaign/${activeCampaignId}/regenerate/${lastGm.id}`, null, {
-      onStart: (evt) => setPromptStats(evt.stats),
+      onStart: (evt) => {
+        setPromptStats(evt.stats);
+        setLastResolution(evt.action_resolution || null);
+      },
       onToken: (t) => setMessages(prev => {
         const copy = [...prev];
         copy[copy.length - 1] = { ...copy[copy.length - 1], content: copy[copy.length - 1].content + t };
@@ -179,14 +147,14 @@ function AppInner() {
   const handleDeleteMessage = async (msgId) => {
     if (!msgId || msgId.startsWith('temp')) return;
     const ok = await modal.confirm({
-      title: 'Delete message?',
-      message: 'This reverses any stat, inventory, location, or NPC changes attributed to this message and removes its memory entry.',
-      confirmLabel: 'Delete',
+      title: 'Delete turn?',
+      message: 'This removes the player action and GM response for this turn, reverses attributed state changes, and removes its memory entry.',
+      confirmLabel: 'Delete Turn',
       danger: true
     });
     if (!ok) return;
     try {
-      const res = await fetch(`${API_BASE}/api/campaign/${activeCampaignId}/message/${msgId}`, { method: 'DELETE' });
+      const res = await fetch(apiUrl(`/api/campaign/${activeCampaignId}/message/${msgId}`), { method: 'DELETE' });
       if (!res.ok) {
         banner.error('Delete failed');
         return;
@@ -218,8 +186,8 @@ function AppInner() {
     });
     if (!ok) return;
     try {
-      await fetch(`${API_BASE}/api/campaigns/${id}`, { method: 'DELETE' });
-      const res = await fetch(`${API_BASE}/api/campaigns`);
+      await fetch(apiUrl(`/api/campaigns/${id}`), { method: 'DELETE' });
+      const res = await fetch(apiUrl('/api/campaigns'));
       setSavedCampaigns(await res.json());
     } catch (err) {
       banner.error(`Delete failed: ${err.message}`);
@@ -228,7 +196,7 @@ function AppInner() {
 
   const handleFork = async () => {
     try {
-      const res = await fetch(`${API_BASE}/api/campaigns/${activeCampaignId}/fork`, { method: 'POST' });
+      const res = await fetch(apiUrl(`/api/campaigns/${activeCampaignId}/fork`), { method: 'POST' });
       if (res.ok) {
         const data = await res.json();
         if (data.status === 'success') {
@@ -245,24 +213,34 @@ function AppInner() {
 
   const pushUndo = (entry) => setUndoStack(s => [...s.slice(-19), entry]);
 
-  const pushStateEdit = async (mutator, description) => {
+  const pushStatePatch = async (patch, mutator, description) => {
+    if (!campaignState) return;
+    const before = structuredClone(campaignState);
     const next = structuredClone(campaignState);
     mutator(next);
-    pushUndo({ before: campaignState, description });
+    pushUndo({ before, description });
     setCampaignState(next);
     try {
-      const res = await fetch(`${API_BASE}/api/state/${activeCampaignId}`, {
-        method: 'PUT',
+      const res = await fetch(apiUrl(`/api/state/${activeCampaignId}`), {
+        method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(next)
+        body: JSON.stringify({ expected_revision: before.revision, ...patch })
       });
       if (!res.ok) {
-        banner.error('Edit rejected by backend');
-        setCampaignState(campaignState);
+        if (res.status === 409) {
+          banner.warn('Campaign changed while editing. Refreshed the latest state.');
+          await refreshState(activeCampaignId);
+        } else {
+          banner.error('Edit rejected by backend');
+          setCampaignState(before);
+        }
+        return;
       }
+      const data = await res.json();
+      setCampaignState(data.state);
     } catch (e) {
       banner.error(`Edit failed: ${e.message}`);
-      setCampaignState(campaignState);
+      setCampaignState(before);
     }
   };
 
@@ -272,12 +250,31 @@ function AppInner() {
     setUndoStack(s => s.slice(0, -1));
     setCampaignState(last.before);
     try {
-      await fetch(`${API_BASE}/api/state/${activeCampaignId}`, {
-        method: 'PUT',
+      const res = await fetch(apiUrl(`/api/state/${activeCampaignId}`), {
+        method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(last.before)
+        body: JSON.stringify({
+          expected_revision: campaignState?.revision,
+          player: {
+            name: last.before.player?.name,
+            location: last.before.player?.location
+          },
+          stats: last.before.player?.stats || {},
+          inventory: last.before.player?.inventory || [],
+          npcs: last.before.npcs || [],
+          lorebook: last.before.lorebook || {},
+          stat_bounds: last.before.stat_bounds || {}
+        })
       });
-    } catch {}
+      if (res.ok) {
+        const data = await res.json();
+        setCampaignState(data.state);
+      } else {
+        await refreshState(activeCampaignId);
+      }
+    } catch (e) {
+      banner.error(`Undo failed: ${e.message}`);
+    }
   };
 
   useEffect(() => {
@@ -291,21 +288,53 @@ function AppInner() {
     return () => window.removeEventListener('keydown', onKey);
   });
 
-  const updateStat = (name, val) => pushStateEdit(s => { s.player.stats[name] = val; }, `Edit ${name}`);
-  const updateLocation = (loc) => pushStateEdit(s => { s.player.location = loc; }, 'Edit location');
-  const addInventory = (item) => { if (item.trim()) pushStateEdit(s => { (s.player.inventory ||= []).push(item.trim()); }, 'Add item'); };
-  const removeInventory = (item) => pushStateEdit(s => { s.player.inventory = s.player.inventory.filter(i => i !== item); }, 'Remove item');
-  const updateNpc = (idx, patch) => pushStateEdit(s => { s.npcs[idx] = { ...s.npcs[idx], ...patch }; }, 'Edit NPC');
-  const removeNpc = (idx) => pushStateEdit(s => { s.npcs.splice(idx, 1); }, 'Remove NPC');
-  const addNpc = (n) => pushStateEdit(s => { s.npcs.push(n); }, 'Add NPC');
-  const updateLore = (key, rule) => pushStateEdit(s => { s.lorebook[key] = rule; }, 'Edit lore');
-  const removeLore = (key) => pushStateEdit(s => { delete s.lorebook[key]; }, 'Remove lore');
+  const updateStat = (name, val) => pushStatePatch({ stats: { [name]: val } }, s => { s.player.stats[name] = val; }, `Edit ${name}`);
+  const updateLocation = (loc) => pushStatePatch({ player: { location: loc } }, s => { s.player.location = loc; }, 'Edit location');
+  const addInventory = (item) => {
+    if (!item.trim()) return;
+    const inventory = [...(campaignState.player?.inventory || []), item.trim()];
+    pushStatePatch({ inventory }, s => { s.player.inventory = inventory; }, 'Add item');
+  };
+  const removeInventory = (item) => {
+    const inventory = (campaignState.player?.inventory || []).filter(i => i !== item);
+    pushStatePatch({ inventory }, s => { s.player.inventory = inventory; }, 'Remove item');
+  };
+  const updateNpc = (idx, patch) => {
+    const npcs = [...(campaignState.npcs || [])];
+    npcs[idx] = { ...npcs[idx], ...patch };
+    pushStatePatch({ npcs }, s => { s.npcs = npcs; }, 'Edit NPC');
+  };
+  const removeNpc = (idx) => {
+    const npcs = (campaignState.npcs || []).filter((_, i) => i !== idx);
+    pushStatePatch({ npcs }, s => { s.npcs = npcs; }, 'Remove NPC');
+  };
+  const addNpc = (n) => {
+    const npcs = [...(campaignState.npcs || []), n];
+    pushStatePatch({ npcs }, s => { s.npcs = npcs; }, 'Add NPC');
+  };
+  const updateLore = (key, rule) => {
+    const lorebook = { ...(campaignState.lorebook || {}), [key]: rule };
+    pushStatePatch({ lorebook }, s => { s.lorebook = lorebook; }, 'Edit lore');
+  };
+  const removeLore = (key) => {
+    const lorebook = { ...(campaignState.lorebook || {}) };
+    delete lorebook[key];
+    pushStatePatch({ lorebook }, s => { s.lorebook = lorebook; }, 'Remove lore');
+  };
+  const addLore = () => {
+    const key = newLoreKey.trim();
+    if (!key) return;
+    const lorebook = { ...(campaignState.lorebook || {}), [key]: newLoreRule.trim() };
+    pushStatePatch({ lorebook }, s => { s.lorebook = lorebook; }, 'Add lore');
+    setNewLoreKey('');
+    setNewLoreRule('');
+  };
 
   // -------------------------------------------------------- export / import
 
   const handleExport = async () => {
     try {
-      const res = await fetch(`${API_BASE}/api/campaign/${activeCampaignId}/export`);
+      const res = await fetch(apiUrl(`/api/campaign/${activeCampaignId}/export`));
       if (!res.ok) { banner.error('Export failed'); return; }
       const blob = await res.blob();
       const url = URL.createObjectURL(blob);
@@ -319,11 +348,27 @@ function AppInner() {
     }
   };
 
+  const handleDebugExport = async () => {
+    try {
+      const res = await fetch(apiUrl(`/api/campaign/${activeCampaignId}/debug`));
+      if (!res.ok) { banner.error('Debug export failed'); return; }
+      const blob = await res.blob();
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `${activeCampaignId}.debug.json`;
+      a.click();
+      URL.revokeObjectURL(url);
+    } catch (e) {
+      banner.error(`Debug export failed: ${e.message}`);
+    }
+  };
+
   const handleImport = async (file) => {
     try {
       const text = await file.text();
       const payload = JSON.parse(text);
-      const res = await fetch(`${API_BASE}/api/campaign/import`, {
+      const res = await fetch(apiUrl('/api/campaign/import'), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ state: payload.state, memories: payload.memories })
@@ -331,7 +376,7 @@ function AppInner() {
       if (!res.ok) { banner.error('Import failed'); return; }
       const { campaign_id } = await res.json();
       banner.info(`Imported campaign ${campaign_id}`);
-      const list = await fetch(`${API_BASE}/api/campaigns`);
+      const list = await fetch(apiUrl('/api/campaigns'));
       setSavedCampaigns(await list.json());
     } catch (e) {
       banner.error(`Import failed: ${e.message}`);
@@ -342,7 +387,7 @@ function AppInner() {
 
   const openInspector = async () => {
     try {
-      const res = await fetch(`${API_BASE}/api/campaign/${activeCampaignId}/last_prompt`);
+      const res = await fetch(apiUrl(`/api/campaign/${activeCampaignId}/last_prompt`));
       if (res.ok) {
         const data = await res.json();
         if (data.available) {
@@ -363,7 +408,7 @@ function AppInner() {
         <h1 className="text-6xl text-fantasy-accent drop-shadow-md mb-12 border-b border-slate-700 pb-4">Tavern Tales Reborn</h1>
         <div className="bg-fantasy-panel/40 border border-slate-700/50 rounded-xl shadow-lg backdrop-blur p-8 w-full max-w-2xl text-center">
           <button
-            onClick={() => { setActiveCampaignId(`campaign_${Date.now()}`); setAppMode('setup'); }}
+            onClick={() => { setActiveCampaignId(createCampaignId()); setAppMode('setup'); }}
             className="bg-indigo-700 hover:bg-indigo-600 text-white w-full py-4 rounded-lg font-sans font-bold tracking-widest text-lg uppercase transition shadow-md mb-4"
           >+ Forge New World</button>
 
@@ -405,9 +450,18 @@ function AppInner() {
 
   return (
     <div className="h-screen overflow-hidden flex text-fantasy-text bg-fantasy-dark">
+      {sidebarOpen && (
+        <div
+          className="fixed inset-0 bg-black/60 z-20 md:hidden"
+          onClick={() => setSidebarOpen(false)}
+        />
+      )}
       {/* Sidebar */}
-      <aside className="w-72 bg-fantasy-panel border-r border-slate-700/50 p-4 hidden md:flex flex-col gap-6 overflow-y-auto h-screen">
-        <h2 className="text-2xl font-serif text-fantasy-accent font-bold">Tavern Tales Reborn</h2>
+      <aside className={`${sidebarOpen ? 'fixed inset-y-0 left-0 z-30 flex' : 'hidden'} md:relative md:inset-auto md:z-auto w-72 bg-fantasy-panel border-r border-slate-700/50 p-4 md:flex flex-col gap-6 overflow-y-auto h-screen`}>
+        <div className="flex items-center justify-between gap-2">
+          <h2 className="text-2xl font-serif text-fantasy-accent font-bold">Tavern Tales Reborn</h2>
+          <button className="md:hidden text-xs border text-slate-300 border-slate-700 py-1 px-2 rounded" onClick={() => setSidebarOpen(false)}>Close</button>
+        </div>
         <div className="flex gap-2">
           <button className="text-xs border text-slate-400 border-slate-700 py-1 px-2 rounded hover:bg-slate-700 flex-1" onClick={() => setAppMode('menu')}>Menu</button>
           <button className="text-xs border text-slate-400 border-slate-700 py-1 px-2 rounded hover:bg-slate-700 flex-1" onClick={handleExport}>Export</button>
@@ -519,6 +573,25 @@ function AppInner() {
                   ))}
                 </div>
               )}
+              {directorMode && (
+                <div className="mt-3 bg-fantasy-dark/30 border border-dashed border-slate-600 rounded p-2 flex flex-col gap-2">
+                  <input
+                    type="text"
+                    placeholder="New lore key"
+                    className="w-full bg-slate-800 text-slate-200 border border-slate-600 rounded px-2 py-1 text-xs focus:outline-none focus:border-fantasy-accent"
+                    value={newLoreKey}
+                    onChange={e => setNewLoreKey(e.target.value)}
+                  />
+                  <textarea
+                    placeholder="Rule or note"
+                    className="w-full bg-slate-800 text-slate-200 border border-slate-600 rounded px-2 py-1 text-xs focus:outline-none focus:border-fantasy-accent"
+                    rows={2}
+                    value={newLoreRule}
+                    onChange={e => setNewLoreRule(e.target.value)}
+                  />
+                  <button className="text-xs text-amber-400 hover:text-amber-300 border border-slate-600 rounded px-2 py-1" onClick={addLore}>+ Add Lore</button>
+                </div>
+              )}
             </div>
           </>
         )}
@@ -527,7 +600,10 @@ function AppInner() {
       {/* Main */}
       <main className="flex-1 flex flex-col h-screen relative">
         <header className="p-4 border-b border-slate-700/50 flex justify-between items-center bg-fantasy-panel/90 backdrop-blur sticky top-0 z-10 shadow-sm flex-wrap gap-2">
-          <h1 className="font-serif text-xl text-fantasy-accent drop-shadow-sm">The Story</h1>
+          <div className="flex items-center gap-2">
+            <button className="md:hidden text-xs px-3 py-1 bg-slate-700 hover:bg-slate-600 text-slate-200 border border-slate-600 rounded" onClick={() => setSidebarOpen(true)}>State</button>
+            <h1 className="font-serif text-xl text-fantasy-accent drop-shadow-sm">The Story</h1>
+          </div>
           <div className="flex items-center gap-3 flex-wrap">
             {promptStats && (
               <div className="flex items-center gap-2 text-xs text-slate-400 border-r border-slate-600 pr-3">
@@ -537,9 +613,15 @@ function AppInner() {
                 <span className="font-mono">{promptStats.total_used.toLocaleString()} / {promptStats.model_context_window.toLocaleString()}</span>
               </div>
             )}
+            {lastResolution && (
+              <div className="text-xs text-emerald-300 border border-emerald-700/60 bg-emerald-950/30 rounded px-2 py-1">
+                {lastResolution.summary}
+              </div>
+            )}
             {directorMode && (
               <>
                 <button onClick={openInspector} className="text-xs px-3 py-1 bg-slate-700 hover:bg-slate-600 text-slate-200 border border-slate-600 rounded">Inspect Prompt</button>
+                <button onClick={handleDebugExport} className="text-xs px-3 py-1 bg-slate-700 hover:bg-slate-600 text-slate-200 border border-slate-600 rounded">Debug Bundle</button>
                 <button onClick={handleUndo} disabled={undoStack.length === 0} className="text-xs px-3 py-1 bg-slate-700 hover:bg-slate-600 text-slate-200 border border-slate-600 rounded disabled:opacity-40">Undo ({undoStack.length})</button>
                 <button onClick={handleFork} className="text-xs px-3 py-1 bg-amber-600/30 hover:bg-amber-600/50 text-amber-400 border border-amber-600/50 rounded">Fork Timeline</button>
               </>
@@ -584,14 +666,19 @@ function AppInner() {
 
         <div className="p-4 bg-fantasy-panel border-t border-slate-700/50 shadow-[0_-4px_6px_-1px_rgba(0,0,0,0.1)]">
           <div className="max-w-4xl mx-auto flex gap-3">
-            <input
-              type="text"
+            <textarea
+              rows={1}
               value={input}
               onChange={e => setInput(e.target.value)}
-              onKeyDown={e => e.key === 'Enter' && handleSend()}
+              onKeyDown={e => {
+                if (e.key === 'Enter' && !e.shiftKey) {
+                  e.preventDefault();
+                  handleSend();
+                }
+              }}
               disabled={isStreaming}
               placeholder="Describe your next action..."
-              className="flex-1 bg-fantasy-dark border border-slate-600 rounded-lg px-5 py-4 focus:outline-none focus:border-fantasy-accent text-fantasy-text focus:ring-2 focus:ring-fantasy-accent/50 transition shadow-inner placeholder:text-slate-500 font-serif text-lg"
+              className="flex-1 min-h-[58px] max-h-40 resize-y bg-fantasy-dark border border-slate-600 rounded-lg px-5 py-4 focus:outline-none focus:border-fantasy-accent text-fantasy-text focus:ring-2 focus:ring-fantasy-accent/50 transition shadow-inner placeholder:text-slate-500 font-serif text-lg"
             />
             {isStreaming ? (
               <button

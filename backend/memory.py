@@ -22,7 +22,21 @@ log = logging.getLogger(__name__)
 DB_PATH = os.path.join(os.path.dirname(__file__), "chroma_db")
 _SAFE_ID = re.compile(r"[^A-Za-z0-9_-]")
 
-_client = chromadb.PersistentClient(path=DB_PATH)
+_client: Any | None = None
+
+
+def get_client():
+    """Return the Chroma client, creating it lazily on first real memory use."""
+    global _client
+    if _client is None:
+        _client = chromadb.PersistentClient(path=DB_PATH)
+    return _client
+
+
+def set_client_for_tests(client) -> None:
+    """Inject a test Chroma client without touching the runtime DB at import time."""
+    global _client
+    _client = client
 
 
 def _collection_name(campaign_id: str) -> str:
@@ -34,19 +48,30 @@ def _collection_name(campaign_id: str) -> str:
 
 
 def get_collection(campaign_id: str):
+    client = get_client()
     name = _collection_name(campaign_id)
     try:
-        return _client.get_collection(name=name)
+        return client.get_collection(name=name)
     except Exception:
-        return _client.create_collection(name=name, metadata={"hnsw:space": "cosine"})
+        return client.create_collection(name=name, metadata={"hnsw:space": "cosine"})
 
 
-def add_memory(campaign_id: str, msg_id: str, content: str, turn: int) -> str:
+def add_memory(
+    campaign_id: str,
+    msg_id: str,
+    content: str,
+    turn: int,
+    kind: str = "turn",
+    location: str | None = None,
+) -> str:
     coll = get_collection(campaign_id)
     mem_id = f"mem_{uuid.uuid4().hex[:12]}"
+    metadata = {"campaign": campaign_id, "msg_id": msg_id, "turn": turn, "kind": kind}
+    if location:
+        metadata["location"] = location
     coll.add(
         documents=[content],
-        metadatas=[{"campaign": campaign_id, "msg_id": msg_id, "turn": turn}],
+        metadatas=[metadata],
         ids=[mem_id],
     )
     return mem_id
@@ -61,7 +86,10 @@ def retrieve_relevant_memories(
         coll = get_collection(campaign_id)
         if coll.count() == 0:
             return []
-        res = coll.query(query_texts=[query], n_results=min(n_results, coll.count()))
+        count = coll.count()
+        if count == 0:
+            return []
+        res = coll.query(query_texts=[query], n_results=min(max(n_results * 3, n_results), count))
     except Exception as e:
         log.warning("Vector search failed for %s: %s", campaign_id, e)
         return []
@@ -79,7 +107,21 @@ def retrieve_relevant_memories(
             "metadata": metas[i] if i < len(metas) else {},
             "distance": dists[i] if i < len(dists) else None,
         })
-    return out
+    return sorted(out, key=_hybrid_score)[:n_results]
+
+
+def _hybrid_score(memory_item: dict[str, Any]) -> float:
+    """Lower is better. Blend semantic distance with a small recency preference."""
+    distance = memory_item.get("distance")
+    if distance is None:
+        distance = 1.0
+    meta = memory_item.get("metadata") or {}
+    try:
+        turn = int(meta.get("turn", 0))
+    except (TypeError, ValueError):
+        turn = 0
+    recency_bonus = min(turn / 1000.0, 0.2)
+    return float(distance) - recency_bonus
 
 
 def delete_memories_for_message(campaign_id: str, mem_ids: list[str]) -> None:
@@ -95,7 +137,7 @@ def delete_memories_for_message(campaign_id: str, mem_ids: list[str]) -> None:
 def delete_campaign_memory(campaign_id: str) -> None:
     name = _collection_name(campaign_id)
     try:
-        _client.delete_collection(name=name)
+        get_client().delete_collection(name=name)
     except Exception as e:
         log.info("Collection %s not present (or delete failed): %s", name, e)
 

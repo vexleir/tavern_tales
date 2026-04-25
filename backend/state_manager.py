@@ -25,6 +25,7 @@ from schema import (
     SCHEMA_VERSION,
     CampaignState,
     CampaignSummary,
+    CampaignEvent,
     Disposition,
     Message,
     Role,
@@ -42,6 +43,8 @@ _SAFE_ID = re.compile(r"^[A-Za-z0-9_\-]+$")
 
 _locks: dict[str, asyncio.Lock] = {}
 _locks_guard = asyncio.Lock()
+_turn_locks: dict[str, asyncio.Lock] = {}
+_turn_locks_guard = asyncio.Lock()
 
 _migration_checked = False
 
@@ -87,9 +90,26 @@ async def _get_lock(campaign_id: str) -> asyncio.Lock:
         return lock
 
 
+async def _get_turn_lock(campaign_id: str) -> asyncio.Lock:
+    async with _turn_locks_guard:
+        lock = _turn_locks.get(campaign_id)
+        if lock is None:
+            lock = asyncio.Lock()
+            _turn_locks[campaign_id] = lock
+        return lock
+
+
 @asynccontextmanager
 async def campaign_lock(campaign_id: str):
     lock = await _get_lock(campaign_id)
+    async with lock:
+        yield
+
+
+@asynccontextmanager
+async def turn_lock(campaign_id: str):
+    """Serialize full chat/continue/regenerate turns for one campaign."""
+    lock = await _get_turn_lock(campaign_id)
     async with lock:
         yield
 
@@ -142,6 +162,8 @@ async def save_state(state: CampaignState) -> None:
     _validate_id(state.campaign_id)
     # Ensure we always stamp the current schema version.
     state.schema_version = SCHEMA_VERSION
+    state.revision += 1
+    state.updated_at = datetime.now(timezone.utc).isoformat()
     path = _path_for(state.campaign_id)
     _atomic_write(path, state.model_dump(mode="json"))
 
@@ -376,3 +398,9 @@ async def append_message(campaign_id: str, role: Role | str, content: str, **kwa
 def touch_created(state: CampaignState) -> None:
     if not state.created_at:
         state.created_at = datetime.now(timezone.utc).isoformat()
+
+
+def record_event(state: CampaignState, event_type: str, message: str) -> None:
+    """Append a compact event-log entry, keeping only the most recent 100."""
+    state.events.append(CampaignEvent(type=event_type, message=message))
+    state.events = state.events[-100:]

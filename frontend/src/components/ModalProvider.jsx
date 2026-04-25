@@ -1,8 +1,7 @@
-import { createContext, useCallback, useContext, useState } from 'react';
+import { useCallback, useMemo, useState } from 'react';
+import ModalContext from '../contexts/ModalContext';
 
-const ModalContext = createContext(null);
-
-export function ModalProvider({ children }) {
+export default function ModalProvider({ children }) {
   const [modal, setModal] = useState(null);
 
   const close = useCallback(() => setModal(null), []);
@@ -28,8 +27,10 @@ export function ModalProvider({ children }) {
     });
   }, [close]);
 
+  const api = useMemo(() => ({ confirm, alert }), [confirm, alert]);
+
   return (
-    <ModalContext.Provider value={{ confirm, alert }}>
+    <ModalContext.Provider value={api}>
       {children}
       {modal && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 backdrop-blur-sm">
@@ -59,10 +60,4 @@ export function ModalProvider({ children }) {
       )}
     </ModalContext.Provider>
   );
-}
-
-export function useModal() {
-  const ctx = useContext(ModalContext);
-  if (!ctx) throw new Error('useModal must be used inside ModalProvider');
-  return ctx;
 }

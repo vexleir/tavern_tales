@@ -177,6 +177,91 @@ def test_delete_message_reverses_state(client):
     assert "Potion" not in state["player"]["inventory"]
 
 
+def test_delete_assistant_message_removes_whole_turn(client):
+    """Normal deletion is turn-level: the player action and GM response disappear together."""
+    c, mo = client
+    _init_campaign(c)
+
+    mo.set_stream_text("Open.")
+    _consume_stream(c.post("/api/campaign/camp_flow/kickoff"))
+
+    mo.set_stream_text("You step into the rain.")
+    _consume_stream(c.post("/api/chat/stream", json={"campaign_id": "camp_flow", "user_message": "I go outside."}))
+    state = c.get("/api/state/camp_flow").json()
+    assert any(m["content"] == "I go outside." for m in state["messages"])
+
+    gm_msg = [m for m in state["messages"] if m["role"] == "assistant"][-1]
+    r = c.delete(f"/api/campaign/camp_flow/message/{gm_msg['id']}")
+    assert r.status_code == 200
+
+    state = c.get("/api/state/camp_flow").json()
+    contents = [m["content"] for m in state["messages"]]
+    assert "I go outside." not in contents
+    assert "You step into the rain." not in contents
+
+
+def test_continue_appends_to_existing_assistant_message(client):
+    c, mo = client
+    _init_campaign(c)
+
+    mo.set_stream_text("Opening line")
+    _consume_stream(c.post("/api/campaign/camp_flow/kickoff"))
+    before = c.get("/api/state/camp_flow").json()
+    assistant_count = len([m for m in before["messages"] if m["role"] == "assistant"])
+
+    mo.set_stream_text(" and continuation.")
+    r = c.post("/api/campaign/camp_flow/continue")
+    assert r.status_code == 200
+    _consume_stream(r)
+
+    after = c.get("/api/state/camp_flow").json()
+    assistants = [m for m in after["messages"] if m["role"] == "assistant"]
+    assert len(assistants) == assistant_count
+    assert "Opening line and continuation." in assistants[-1]["content"]
+
+
+def test_director_patch_revision_conflict(client):
+    c, _ = client
+    _init_campaign(c)
+
+    state = c.get("/api/state/camp_flow").json()
+    revision = state["revision"]
+
+    ok = c.patch("/api/state/camp_flow", json={
+        "expected_revision": revision,
+        "player": {"location": "The Old Road"},
+    })
+    assert ok.status_code == 200
+    updated = ok.json()["state"]
+    assert updated["player"]["location"] == "The Old Road"
+    assert updated["revision"] > revision
+
+    stale = c.patch("/api/state/camp_flow", json={
+        "expected_revision": revision,
+        "player": {"location": "Stale Road"},
+    })
+    assert stale.status_code == 409
+
+
+def test_debug_bundle_contains_state_prompt_and_events(client):
+    c, mo = client
+    _init_campaign(c)
+
+    mo.set_stream_text("Opening narration.")
+    _consume_stream(c.post("/api/campaign/camp_flow/kickoff"))
+
+    r = c.get("/api/campaign/camp_flow/debug")
+    assert r.status_code == 200
+    bundle = r.json()
+    assert bundle["campaign_id"] == "camp_flow"
+    assert bundle["state"]["campaign_id"] == "camp_flow"
+    assert bundle["last_prompt"]["system_prompt"]
+    assert isinstance(bundle["memory_count"], int)
+    event_types = [e["type"] for e in bundle["recent_events"]]
+    assert "campaign.init" in event_types
+    assert "turn.stream.complete" in event_types
+
+
 def test_input_size_limit_enforced(client):
     c, _ = client
     _init_campaign(c)

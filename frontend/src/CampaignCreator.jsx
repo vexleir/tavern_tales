@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react';
+import { apiUrl, parseErrorResponse } from './lib/api';
 
 export default function CampaignCreator({ campaignId, onComplete }) {
   const [protagonist, setProtagonist] = useState({
@@ -32,7 +33,7 @@ export default function CampaignCreator({ campaignId, onComplete }) {
   const [submitError, setSubmitError] = useState('');
 
   useEffect(() => {
-    fetch('http://localhost:8000/api/models')
+    fetch(apiUrl('/api/models'))
       .then(r => r.json())
       .then(data => {
         setAvailableModels(data);
@@ -61,10 +62,10 @@ export default function CampaignCreator({ campaignId, onComplete }) {
     if (!worldPrompt.trim()) return;
     setIsGenerating(true);
     try {
-       const res = await fetch('http://localhost:8000/api/world/generate', {
+       const res = await fetch(apiUrl('/api/world/generate'), {
           method: 'POST',
           headers: {'Content-Type':'application/json'},
-          body: JSON.stringify({ prompt: worldPrompt, nsfw: nsfwWorldGen })
+          body: JSON.stringify({ prompt: worldPrompt, nsfw: nsfwWorldGen, model: gmModel || null })
        });
        if(res.ok) {
           const data = await res.json();
@@ -79,18 +80,7 @@ export default function CampaignCreator({ campaignId, onComplete }) {
           if(data.world_description) setWorldDescription(data.world_description);
           if(data.starting_scene) setStartingScene(data.starting_scene);
        } else {
-          const err = await res.json().catch(() => ({detail: res.statusText}));
-          let msg;
-          if (Array.isArray(err.detail)) {
-             msg = err.detail.map(e => {
-                const where = Array.isArray(e.loc) ? e.loc.slice(1).join('.') : '';
-                return where ? `${where}: ${e.msg}` : e.msg;
-             }).join('; ');
-          } else if (typeof err.detail === 'string') {
-             msg = err.detail;
-          } else {
-             msg = JSON.stringify(err.detail);
-          }
+          const msg = await parseErrorResponse(res);
           setSubmitError(`World generation failed (${res.status}): ${msg}`);
        }
     } catch(e) {
@@ -138,7 +128,7 @@ export default function CampaignCreator({ campaignId, onComplete }) {
         nsfw_world_gen: nsfwWorldGen
       };
 
-      const res = await fetch('http://localhost:8000/api/campaign/init', {
+      const res = await fetch(apiUrl('/api/campaign/init'), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(payload)

@@ -54,6 +54,7 @@ class NPC(BaseModel):
 
 class Message(BaseModel):
     id: str = Field(default_factory=lambda: f"msg_{uuid4().hex[:12]}")
+    turn_id: str | None = None
     role: Role
     content: str
     timestamp: str = Field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
@@ -97,6 +98,52 @@ class SamplingOverrides(BaseModel):
     num_predict: int | None = None
 
 
+class RulesConfig(BaseModel):
+    enabled: bool = True
+    dice_mode: str = "d20"
+    default_dc: int = 12
+    tone: str = "dark fantasy"
+    response_length: str = "concise"
+
+
+class QuestObjective(BaseModel):
+    text: str
+    complete: bool = False
+
+
+class Quest(BaseModel):
+    id: str = Field(default_factory=lambda: f"quest_{uuid4().hex[:10]}")
+    title: str
+    status: str = "active"
+    objectives: list[QuestObjective] = Field(default_factory=list)
+
+
+class Condition(BaseModel):
+    name: str
+    severity: str = "minor"
+    duration: str = "scene"
+    source: str = ""
+
+
+class ActionResolution(BaseModel):
+    risky: bool = False
+    stat: str = ""
+    stat_value: int = 0
+    modifier: int = 0
+    roll: int = 0
+    total: int = 0
+    dc: int = 0
+    outcome: str = "none"
+    summary: str = ""
+
+
+class CampaignEvent(BaseModel):
+    id: str = Field(default_factory=lambda: f"evt_{uuid4().hex[:10]}")
+    timestamp: str = Field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
+    type: str
+    message: str
+
+
 class ReversalPatch(BaseModel):
     """Inverse of an extraction delta, used to roll back a message's side effects (B1/B2)."""
 
@@ -110,6 +157,8 @@ class ReversalPatch(BaseModel):
 class MessageSideEffects(BaseModel):
     memory_ids: list[str] = Field(default_factory=list)
     reversal: ReversalPatch = Field(default_factory=ReversalPatch)
+    status: str = "pending"
+    error: str = ""
 
 
 # ---------------------------------------------------------------------------
@@ -123,6 +172,8 @@ class CampaignState(BaseModel):
     schema_version: int = SCHEMA_VERSION
     campaign_id: str
     created_at: str = Field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
+    updated_at: str = Field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
+    revision: int = 0
 
     models: ModelConfig = Field(default_factory=ModelConfig)
 
@@ -131,11 +182,15 @@ class CampaignState(BaseModel):
     lorebook: dict[str, str] = Field(default_factory=dict)
     world_description: str = ""
     starting_scene: str = ""
+    rules: RulesConfig = Field(default_factory=RulesConfig)
+    quests: list[Quest] = Field(default_factory=list)
+    conditions: list[Condition] = Field(default_factory=list)
 
     messages: list[Message] = Field(default_factory=list)
     summaries: Summaries = Field(default_factory=Summaries)
 
     side_effects: dict[str, MessageSideEffects] = Field(default_factory=dict)
+    events: list[CampaignEvent] = Field(default_factory=list)
 
     stat_bounds: dict[str, StatBound] = Field(default_factory=dict)
     sampling_overrides: SamplingOverrides = Field(default_factory=SamplingOverrides)
@@ -187,6 +242,9 @@ class BlockTokens(BaseModel):
     arc_summary: int = 0
     chapter_summaries: int = 0
     short_summary: int = 0
+    action_resolution: int = 0
+    quests: int = 0
+    conditions: int = 0
     memories: int = 0
 
 

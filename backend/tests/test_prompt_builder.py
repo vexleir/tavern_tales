@@ -148,3 +148,12 @@ def test_memories_deduped_against_window():
     # The window itself (passed as chat messages) still carries the original.
     window_contents = "\n".join(m["content"] for m in built.messages if m["role"] != "system")
     assert "glowing crystal" in window_contents
+
+
+def test_large_lorebook_is_truncated():
+    s = _rich_state()
+    s.lorebook = {f"Lore{i}": ("very long rule " * 80) for i in range(80)}
+    built = build_prompt(s, user_message="x")
+    assert "LOREBOOK" in built.system_prompt
+    assert "truncated to fit prompt budget" in built.system_prompt
+    assert built.stats.total_used <= built.stats.model_context_window
