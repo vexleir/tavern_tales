@@ -458,13 +458,6 @@ async def _run_chat_stream(
         gm_msg_id: str | None = None
         if new_state is not None:
             gm_msg_id = new_state.messages[-1].id
-            if gm_text and not cancelled:
-                await _background_after_turn(
-                    campaign_id=campaign_id,
-                    user_action=user_message or "",
-                    gm_msg_id=gm_msg_id,
-                    gm_text=gm_text,
-                )
 
         yield _sse_pack({
             "type": "done",
@@ -474,6 +467,19 @@ async def _run_chat_stream(
             "gm_msg_id": gm_msg_id,
             "turn_id": turn_id,
         })
+
+        # Extraction + summarization run AFTER the stream closes. They make
+        # another LLM call (utility model) and would otherwise keep the
+        # frontend's "weaving the thread" indicator up well past the visible
+        # narration. mutate_state has its own lock so concurrency with a
+        # follow-up turn is safe.
+        if gm_msg_id and gm_text and not cancelled:
+            asyncio.create_task(_background_after_turn(
+                campaign_id=campaign_id,
+                user_action=user_message or "",
+                gm_msg_id=gm_msg_id,
+                gm_text=gm_text,
+            ))
 
 
 @app.post("/api/chat/stream", dependencies=[Depends(chat_rate_limit)])
