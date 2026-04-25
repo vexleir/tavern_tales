@@ -28,7 +28,7 @@ DEFAULT_SAMPLING: dict[str, Any] = {
     "top_p": 0.9,
     "top_k": 40,
     "min_p": 0.05,
-    "num_predict": 768,
+    "num_predict": 1024,
     "stop": ["\nUser:", "\nPlayer:", "User:", "[END]"],
 }
 
