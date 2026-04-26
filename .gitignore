@@ -19,6 +19,9 @@ build/
 .idea/
 .vscode/
 backend/chroma_db/
-backend/states/*.json
-backend/states/*.tmp
+backend/chroma_db/**
+backend/states/
+backend/states/**
+backend/campaign_states.json
+backend/campaign_states.json.*
 backend/*.legacy.bak
