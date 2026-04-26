@@ -25,6 +25,8 @@ function AppInner() {
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [newLoreKey, setNewLoreKey] = useState('');
   const [newLoreRule, setNewLoreRule] = useState('');
+  const [renamingId, setRenamingId] = useState(null);
+  const [renameDraft, setRenameDraft] = useState('');
 
   const modal = useModal();
   const banner = useBanner();
@@ -201,6 +203,40 @@ function AppInner() {
       setSavedCampaigns(await res.json());
     } catch (err) {
       banner.error(`Delete failed: ${err.message}`);
+    }
+  };
+
+  const beginRename = (c, e) => {
+    e.stopPropagation();
+    setRenamingId(c.id);
+    setRenameDraft(c.title || '');
+  };
+
+  const cancelRename = (e) => {
+    if (e) e.stopPropagation();
+    setRenamingId(null);
+    setRenameDraft('');
+  };
+
+  const submitRename = async (id, e) => {
+    if (e) e.stopPropagation();
+    const title = renameDraft.trim();
+    try {
+      const res = await apiFetch(`/api/campaigns/${id}/rename`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ title })
+      });
+      if (!res.ok) {
+        banner.error('Rename failed');
+        return;
+      }
+      const list = await apiFetch('/api/campaigns');
+      setSavedCampaigns(await list.json());
+      setRenamingId(null);
+      setRenameDraft('');
+    } catch (err) {
+      banner.error(`Rename failed: ${err.message}`);
     }
   };
 
@@ -438,11 +474,37 @@ function AppInner() {
           <div className="flex flex-col gap-3">
             {savedCampaigns.map(c => (
               <div key={c.id} className="flex gap-2">
-                <button onClick={() => loadCampaign(c.id)} className="flex-1 bg-fantasy-dark/50 hover:bg-slate-700 border border-slate-600 rounded p-4 text-left font-sans flex justify-between items-center transition">
-                  <span className="text-amber-500 font-bold">{c.player}'s Tale</span>
-                  <span className="text-xs text-slate-500">{c.id}</span>
-                </button>
-                <button onClick={(e) => deleteCampaign(c.id, e)} className="bg-red-900/40 hover:bg-red-800 text-red-200 border border-red-900/50 rounded px-4 font-sans font-bold transition" title="Delete World">✗</button>
+                {renamingId === c.id ? (
+                  <div className="flex-1 flex gap-2 bg-fantasy-dark/50 border border-fantasy-accent/60 rounded p-2">
+                    <input
+                      autoFocus
+                      type="text"
+                      value={renameDraft}
+                      maxLength={120}
+                      placeholder={`${c.player}'s Tale`}
+                      onClick={(e) => e.stopPropagation()}
+                      onChange={(e) => setRenameDraft(e.target.value)}
+                      onKeyDown={(e) => {
+                        if (e.key === 'Enter') { e.preventDefault(); submitRename(c.id, e); }
+                        if (e.key === 'Escape') { e.preventDefault(); cancelRename(e); }
+                      }}
+                      className="flex-1 bg-slate-800 border border-slate-600 rounded px-3 py-2 text-amber-100 text-sm focus:outline-none focus:border-fantasy-accent"
+                    />
+                    <button onClick={(e) => submitRename(c.id, e)} className="bg-fantasy-accent hover:bg-amber-600 text-white px-3 rounded text-sm font-bold transition">Save</button>
+                    <button onClick={cancelRename} className="bg-slate-700 hover:bg-slate-600 text-slate-200 px-3 rounded text-sm transition">Cancel</button>
+                  </div>
+                ) : (
+                  <button onClick={() => loadCampaign(c.id)} className="flex-1 bg-fantasy-dark/50 hover:bg-slate-700 border border-slate-600 rounded p-4 text-left font-sans flex justify-between items-center transition">
+                    <span className="text-amber-500 font-bold">{c.title?.trim() || `${c.player}'s Tale`}</span>
+                    <span className="text-xs text-slate-500">{c.id}</span>
+                  </button>
+                )}
+                {renamingId !== c.id && (
+                  <>
+                    <button onClick={(e) => beginRename(c, e)} className="bg-slate-800 hover:bg-slate-700 text-slate-300 border border-slate-600 rounded px-4 font-sans font-bold transition" title="Rename World">✎</button>
+                    <button onClick={(e) => deleteCampaign(c.id, e)} className="bg-red-900/40 hover:bg-red-800 text-red-200 border border-red-900/50 rounded px-4 font-sans font-bold transition" title="Delete World">✗</button>
+                  </>
+                )}
               </div>
             ))}
           </div>

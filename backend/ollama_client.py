@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 from typing import Any, AsyncGenerator
 
 import httpx
@@ -113,16 +114,45 @@ async def stream_chat(
         yield {"type": "error", "data": f"Unexpected streaming error: {e}"}
 
 
-async def complete_json(
+_JSON_FENCE_RE = re.compile(r"^\s*```(?:json)?\s*(.*?)\s*```\s*$", re.DOTALL | re.IGNORECASE)
+
+
+def _coerce_json(content: str) -> tuple[dict[str, Any] | None, str | None]:
+    """Try to parse `content` as JSON, with light tolerance for common LLM quirks
+    (markdown code fences, leading/trailing prose). Returns (result, error)."""
+    raw = content.strip()
+    if not raw:
+        return None, "empty content"
+
+    fenced = _JSON_FENCE_RE.match(raw)
+    if fenced:
+        raw = fenced.group(1).strip()
+
+    try:
+        return json.loads(raw), None
+    except json.JSONDecodeError:
+        # Last-ditch: extract the first {...} block.
+        start = raw.find("{")
+        end = raw.rfind("}")
+        if start >= 0 and end > start:
+            try:
+                return json.loads(raw[start:end + 1]), None
+            except json.JSONDecodeError as e2:
+                snippet = raw[:200].replace("\n", " ")
+                return None, f"JSON parse failure after fence/brace recovery: {e2} (raw starts: {snippet!r})"
+        snippet = raw[:200].replace("\n", " ")
+        return None, f"output is not valid JSON (raw starts: {snippet!r})"
+
+
+async def complete_json_detail(
     messages: list[dict[str, str]],
     model: str,
     timeout: float = 60.0,
     num_predict: int = 768,
-) -> dict[str, Any] | None:
+) -> tuple[dict[str, Any] | None, str | None]:
     """
-    Non-streaming JSON-mode completion for utility tasks (extraction, summarization).
-
-    Returns parsed JSON dict on success, None on any failure (caller decides what to do).
+    Non-streaming JSON-mode completion. Returns (parsed_dict, None) on success,
+    (None, error_message) on any failure — caller decides whether to log/surface.
     """
     payload = {
         "model": model,
@@ -134,19 +164,34 @@ async def complete_json(
     try:
         async with httpx.AsyncClient() as client:
             res = await client.post(OLLAMA_URL, json=payload, timeout=timeout)
-            res.raise_for_status()
+            if res.status_code >= 400:
+                body = res.text[:300]
+                return None, f"Ollama HTTP {res.status_code} from {model}: {body}"
             data = res.json()
             content = data.get("message", {}).get("content", "")
-            if not content:
-                log.warning("complete_json: empty content from %s", model)
-                return None
-            return json.loads(content)
-    except json.JSONDecodeError as e:
-        log.warning("complete_json: JSON parse failure from %s: %s", model, e)
-        return None
-    except Exception as e:
-        log.warning("complete_json: call to %s failed: %s", model, e)
-        return None
+            result, parse_err = _coerce_json(content)
+            if result is not None:
+                return result, None
+            log.warning("complete_json: %s from %s", parse_err, model)
+            return None, parse_err
+    except httpx.ConnectError:
+        return None, "could not connect to Ollama on localhost:11434 — is it running?"
+    except httpx.ReadTimeout:
+        return None, f"Ollama timed out after {timeout:.0f}s on {model}"
+    except Exception as e:  # noqa: BLE001
+        log.exception("complete_json: unexpected failure from %s", model)
+        return None, f"{type(e).__name__}: {e}"
+
+
+async def complete_json(
+    messages: list[dict[str, str]],
+    model: str,
+    timeout: float = 60.0,
+    num_predict: int = 768,
+) -> dict[str, Any] | None:
+    """Backward-compatible wrapper — returns just the dict, or None on any failure."""
+    result, _ = await complete_json_detail(messages, model, timeout=timeout, num_predict=num_predict)
+    return result
 
 
 async def complete_text(

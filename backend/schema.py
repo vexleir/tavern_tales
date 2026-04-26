@@ -177,6 +177,7 @@ class CampaignState(BaseModel):
 
     schema_version: int = SCHEMA_VERSION
     campaign_id: str
+    title: str = ""  # user-editable display name; UI falls back to "{player}'s Tale" when empty
     created_at: str = Field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
     updated_at: str = Field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
     revision: int = 0
@@ -207,6 +208,7 @@ class CampaignSummary(BaseModel):
 
     id: str
     player: str
+    title: str = ""
     created_at: str | None = None
 
 

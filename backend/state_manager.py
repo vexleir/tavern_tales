@@ -201,6 +201,7 @@ async def list_campaigns() -> list[CampaignSummary]:
                 CampaignSummary(
                     id=raw.get("campaign_id", entry.stem),
                     player=raw.get("player", {}).get("name", "Unknown"),
+                    title=raw.get("title", "") or "",
                     created_at=raw.get("created_at"),
                 )
             )

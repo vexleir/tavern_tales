@@ -32,7 +32,7 @@ import state_manager
 import summarizer
 from logging_config import campaign_id_ctx, configure_logging, request_id_ctx
 from model_resolver import NSFW_CREATIVE_MODEL
-from ollama_client import complete_json, stream_chat
+from ollama_client import complete_json_detail, stream_chat
 from rate_limit import chat_rate_limit
 from schema import (
     SCHEMA_VERSION,
@@ -247,6 +247,30 @@ async def delete_campaign(campaign_id: str):
     memory.delete_campaign_memory(campaign_id)
     _LAST_PROMPT.pop(campaign_id, None)
     return {"status": "success" if deleted else "not_found"}
+
+
+class RenameCampaignRequest(BaseModel):
+    title: str = Field(..., max_length=120)
+
+
+@app.post("/api/campaigns/{campaign_id}/rename")
+async def rename_campaign(campaign_id: str, req: RenameCampaignRequest):
+    campaign_id_ctx.set(campaign_id)
+    new_title = req.title.strip()
+
+    async def _apply(state: CampaignState) -> CampaignState:
+        state.title = new_title
+        state_manager.record_event(
+            state,
+            "campaign.rename",
+            f"Campaign renamed to {new_title!r}." if new_title else "Campaign title cleared.",
+        )
+        return state
+
+    new_state = await state_manager.mutate_state(campaign_id, _apply)
+    if new_state is None:
+        raise HTTPException(404, "campaign not found")
+    return {"status": "success", "title": new_state.title}
 
 
 @app.get("/api/state/{campaign_id}")
@@ -797,14 +821,14 @@ Ensure exactly 3 NPCs and at least 3 lorebook entries. Every player and NPC fiel
 
 User Concept: {req.prompt}"""
 
-    result = await complete_json(
+    result, err = await complete_json_detail(
         messages=[{"role": "user", "content": sys_prompt}],
         model=model,
         timeout=180.0,
         num_predict=2048,
     )
     if result is None:
-        raise HTTPException(502, f"World generation failed (model {model} unavailable or returned no JSON)")
+        raise HTTPException(502, f"World generation failed on model {model}: {err or 'unknown error'}")
     return result
 
 

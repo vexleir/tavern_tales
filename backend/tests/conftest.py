@@ -118,6 +118,12 @@ class MockOllama:
         self.json_calls.append({"messages": messages, "model": model, "num_predict": num_predict})
         return self._json_payload
 
+    async def complete_json_detail(self, messages, model, timeout=60.0, num_predict=768):
+        self.json_calls.append({"messages": messages, "model": model, "num_predict": num_predict})
+        if self._json_payload is None:
+            return None, "mock: no payload set"
+        return self._json_payload, None
+
     async def complete_text(self, messages, model, timeout=60.0, num_predict=512):
         self.text_calls.append({"messages": messages, "model": model})
         return self._text_payload
@@ -131,6 +137,7 @@ def mock_ollama(monkeypatch):
     import ollama_client
     monkeypatch.setattr(ollama_client, "stream_chat", m.stream_chat)
     monkeypatch.setattr(ollama_client, "complete_json", m.complete_json)
+    monkeypatch.setattr(ollama_client, "complete_json_detail", m.complete_json_detail)
     monkeypatch.setattr(ollama_client, "complete_text", m.complete_text)
 
     # Downstream modules imported these names directly, so patch them there too.
@@ -142,7 +149,7 @@ def mock_ollama(monkeypatch):
 
     import main
     monkeypatch.setattr(main, "stream_chat", m.stream_chat)
-    monkeypatch.setattr(main, "complete_json", m.complete_json)
+    monkeypatch.setattr(main, "complete_json_detail", m.complete_json_detail)
 
     return m
 

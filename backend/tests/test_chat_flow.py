@@ -71,6 +71,39 @@ def test_init_and_list(client):
     assert "no-store" in r.headers["cache-control"]
     listing = r.json()
     assert any(x["id"] == "camp_flow" for x in listing)
+    summary = next(x for x in listing if x["id"] == "camp_flow")
+    assert summary["title"] == ""
+
+
+def test_rename_campaign_round_trips(client):
+    c, _ = client
+    _init_campaign(c)
+
+    r = c.post("/api/campaigns/camp_flow/rename", json={"title": "  The Crown Saga  "})
+    assert r.status_code == 200
+    assert r.json()["title"] == "The Crown Saga"  # trimmed
+
+    listing = c.get("/api/campaigns").json()
+    summary = next(x for x in listing if x["id"] == "camp_flow")
+    assert summary["title"] == "The Crown Saga"
+
+    # Clearing the title is allowed.
+    r = c.post("/api/campaigns/camp_flow/rename", json={"title": ""})
+    assert r.status_code == 200
+    assert r.json()["title"] == ""
+
+
+def test_rename_unknown_campaign_returns_404(client):
+    c, _ = client
+    r = c.post("/api/campaigns/no_such_id/rename", json={"title": "X"})
+    assert r.status_code == 404
+
+
+def test_rename_title_length_capped(client):
+    c, _ = client
+    _init_campaign(c)
+    r = c.post("/api/campaigns/camp_flow/rename", json={"title": "x" * 200})
+    assert r.status_code == 422
 
 
 def test_kickoff_stream_produces_narrative(client):
