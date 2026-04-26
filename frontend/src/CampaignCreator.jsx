@@ -106,6 +106,18 @@ export default function CampaignCreator({ campaignId, onComplete }) {
     }
   };
 
+  const handleGmModelChange = (value) => {
+    setGmModel(value);
+    if (value) localStorage.setItem('tt_preferred_gm', value);
+    else localStorage.removeItem('tt_preferred_gm');
+  };
+
+  const handleUtilityModelChange = (value) => {
+    setUtilityModel(value);
+    if (value) localStorage.setItem('tt_preferred_utility', value);
+    else localStorage.removeItem('tt_preferred_utility');
+  };
+
   const addNpc = () => {
     if (!newNpc.name.trim()) return;
     setNpcs([...npcs, {
@@ -182,7 +194,7 @@ export default function CampaignCreator({ campaignId, onComplete }) {
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
             <div>
               <label className="block text-xs uppercase tracking-widest text-slate-400 mb-1">Narrator Model (GM)</label>
-              <select value={gmModel} onChange={e=>setGmModel(e.target.value)} className="w-full bg-fantasy-dark border border-slate-600 rounded px-3 py-2 focus:border-fantasy-accent focus:outline-none text-sm">
+              <select value={gmModel} onChange={e=>handleGmModelChange(e.target.value)} className="w-full bg-fantasy-dark border border-slate-600 rounded px-3 py-2 focus:border-fantasy-accent focus:outline-none text-sm">
                 {availableModels.length === 0 && <option value="">(no models found — start Ollama)</option>}
                 {availableModels.map(m => <option key={m} value={m}>{m}</option>)}
               </select>
@@ -190,7 +202,7 @@ export default function CampaignCreator({ campaignId, onComplete }) {
             </div>
             <div>
               <label className="block text-xs uppercase tracking-widest text-slate-400 mb-1">Utility Model (summary + state extraction)</label>
-              <select value={utilityModel} onChange={e=>setUtilityModel(e.target.value)} className="w-full bg-fantasy-dark border border-slate-600 rounded px-3 py-2 focus:border-fantasy-accent focus:outline-none text-sm">
+              <select value={utilityModel} onChange={e=>handleUtilityModelChange(e.target.value)} className="w-full bg-fantasy-dark border border-slate-600 rounded px-3 py-2 focus:border-fantasy-accent focus:outline-none text-sm">
                 <option value="">(auto — fall back through llama3.1:8b, qwen2.5:7b, …)</option>
                 {availableModels.map(m => <option key={m} value={m}>{m}</option>)}
               </select>

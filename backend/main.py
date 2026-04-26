@@ -31,7 +31,7 @@ import prompt_builder
 import state_manager
 import summarizer
 from logging_config import campaign_id_ctx, configure_logging, request_id_ctx
-from model_resolver import DEFAULT_CREATIVE_MODEL, NSFW_CREATIVE_MODEL
+from model_resolver import NSFW_CREATIVE_MODEL
 from ollama_client import complete_json, stream_chat
 from rate_limit import chat_rate_limit
 from schema import (
@@ -723,17 +723,21 @@ async def generate_world(req: GenerateWorldRequest):
     # World generation needs reliable JSON, so route it through the utility
     # fallback chain. Stale clients may still send `model` as the narrator;
     # treat that only as a GM hint, never as the world-gen model itself.
-    if req.nsfw:
+    selected_utility = req.utility_model
+    gm_hint = req.gm_model or req.model or ""
+    if gm_hint and selected_utility == gm_hint:
+        selected_utility = None
+
+    if req.nsfw and await model_resolver.is_model_available(NSFW_CREATIVE_MODEL):
         model = NSFW_CREATIVE_MODEL
     else:
-        gm_hint = req.gm_model or req.model or ""
-        preferred_utility = req.utility_model or DEFAULT_CREATIVE_MODEL
-        if gm_hint and preferred_utility == gm_hint:
-            preferred_utility = DEFAULT_CREATIVE_MODEL
-        model = await model_resolver.resolve_utility_model(
-            preferred_utility,
-            DEFAULT_CREATIVE_MODEL,
-        )
+        model = await model_resolver.resolve_world_generation_model(selected_utility)
+        if model is None:
+            raise HTTPException(
+                400,
+                "World generation requires an available utility/summary model. "
+                "Select one in Utility Model or pull llama3.1:8b-instruct/qwen2.5:7b-instruct.",
+            )
 
     sys_prompt = f"""You are an expert worldbuilder for a text RPG. Expand the user's vague concept into a richly detailed starting state.
 

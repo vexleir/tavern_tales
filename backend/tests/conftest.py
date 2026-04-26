@@ -156,10 +156,14 @@ def mock_resolver(monkeypatch):
     async def _resolve(preferred, gm_fallback):
         return preferred or gm_fallback
 
+    async def _resolve_world(preferred):
+        return preferred or model_resolver.DEFAULT_UTILITY_FALLBACKS[0]
+
     async def _available(name):
         return True
 
     monkeypatch.setattr(model_resolver, "resolve_utility_model", _resolve)
+    monkeypatch.setattr(model_resolver, "resolve_world_generation_model", _resolve_world)
     monkeypatch.setattr(model_resolver, "is_model_available", _available)
 
     # Modules that imported the function by name.

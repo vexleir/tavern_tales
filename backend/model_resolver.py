@@ -110,6 +110,34 @@ async def resolve_utility_model(preferred: str | None, gm_fallback: str) -> str:
     return gm_fallback
 
 
+async def resolve_world_generation_model(preferred: str | None) -> str | None:
+    """Return a JSON-capable model for world generation, without falling back to the GM model."""
+    chain: list[str] = []
+    if preferred:
+        chain.append(preferred)
+    chain.extend(m for m in DEFAULT_UTILITY_FALLBACKS if m not in chain)
+
+    pulled = await _list_pulled_tags()
+    if not pulled:
+        # If Ollama tag lookup failed, trust the selected/default utility model
+        # and let the generation call surface the real connection/model error.
+        return preferred or DEFAULT_UTILITY_FALLBACKS[0]
+
+    for candidate in chain:
+        resolved = _match(pulled, candidate)
+        if resolved:
+            if preferred and resolved != preferred and resolved != f"{preferred}:latest":
+                log.warning(
+                    "Preferred world-generation utility model %r not pulled; falling back to %r",
+                    preferred,
+                    resolved,
+                )
+            return resolved
+
+    log.warning("No utility/world-generation model in fallback chain is pulled.")
+    return None
+
+
 async def is_model_available(name: str) -> bool:
     pulled = await _list_pulled_tags()
     return _match(pulled, name) is not None

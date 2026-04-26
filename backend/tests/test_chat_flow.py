@@ -293,7 +293,7 @@ def test_world_generation_uses_utility_model(client):
 
 
 def test_world_generation_ignores_legacy_narrator_model(client):
-    from model_resolver import DEFAULT_CREATIVE_MODEL
+    from model_resolver import DEFAULT_UTILITY_FALLBACKS
 
     c, mo = client
     mo.set_json({
@@ -311,7 +311,57 @@ def test_world_generation_ignores_legacy_narrator_model(client):
     })
 
     assert r.status_code == 200
-    assert mo.json_calls[-1]["model"] == DEFAULT_CREATIVE_MODEL
+    assert mo.json_calls[-1]["model"] == DEFAULT_UTILITY_FALLBACKS[0]
+
+
+def test_world_generation_requires_available_utility_model(client, monkeypatch):
+    import model_resolver
+
+    async def _none(preferred):
+        return None
+
+    monkeypatch.setattr(model_resolver, "resolve_world_generation_model", _none)
+
+    c, mo = client
+    mo.set_json({"world_description": "unused"})
+
+    r = c.post("/api/world/generate", json={
+        "prompt": "a world with no local utility model",
+        "model": "narrator-model",
+    })
+
+    assert r.status_code == 400
+    assert "utility/summary model" in r.text
+    assert mo.json_calls == []
+
+
+def test_world_generation_nsfw_falls_back_to_utility_when_creative_missing(client, monkeypatch):
+    import model_resolver
+
+    async def _unavailable(name):
+        return False
+
+    monkeypatch.setattr(model_resolver, "is_model_available", _unavailable)
+
+    c, mo = client
+    mo.set_json({
+        "world_description": "A dangerous realm.",
+        "starting_scene": "You wake beside a red lantern.",
+        "player_starting_location": "Lantern Alley",
+        "story_summary": "The realm is dangerous.",
+        "lorebook": [],
+        "npcs": [],
+    })
+
+    r = c.post("/api/world/generate", json={
+        "prompt": "an adult dark-fantasy city",
+        "nsfw": True,
+        "gm_model": "narrator-model",
+        "utility_model": "utility-json-model",
+    })
+
+    assert r.status_code == 200
+    assert mo.json_calls[-1]["model"] == "utility-json-model"
 
 
 def test_world_generation_nsfw_toggle_uses_creative_model(client):
