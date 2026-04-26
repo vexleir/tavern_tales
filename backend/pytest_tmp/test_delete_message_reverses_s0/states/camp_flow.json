@@ -1,0 +1,137 @@
+{
+  "schema_version": 2,
+  "campaign_id": "camp_flow",
+  "created_at": "2026-04-25T13:40:10.297218+00:00",
+  "updated_at": "2026-04-25T13:40:11.797226+00:00",
+  "revision": 6,
+  "models": {
+    "gm": "llama3",
+    "utility": "llama3",
+    "nsfw_world_gen": false
+  },
+  "player": {
+    "name": "Hero",
+    "location": "The Village",
+    "stats": {
+      "Health": 100,
+      "Gold": 50
+    },
+    "inventory": [
+      "Sword"
+    ]
+  },
+  "npcs": [
+    {
+      "name": "Elena",
+      "disposition": "Neutral",
+      "secrets_known": []
+    }
+  ],
+  "lorebook": {
+    "Magic": "Magic is rare."
+  },
+  "world_description": "A misty valley of ancient runes.",
+  "starting_scene": "You wake in a cold tavern.",
+  "rules": {
+    "enabled": true,
+    "dice_mode": "d20",
+    "default_dc": 12,
+    "tone": "dark fantasy",
+    "response_length": "concise"
+  },
+  "quests": [],
+  "conditions": [],
+  "messages": [
+    {
+      "id": "msg_93c4719fe6fb",
+      "turn_id": "turn_6f5cb39b6270",
+      "role": "user",
+      "content": "Begin the scene. Narrate the opening in vivid detail using the world, scene, and protagonist context provided. End at a decision point.",
+      "timestamp": "2026-04-25T13:40:10.336185+00:00",
+      "is_kickoff": true,
+      "partial": false
+    },
+    {
+      "id": "msg_9b81ae802c86",
+      "turn_id": "turn_6f5cb39b6270",
+      "role": "assistant",
+      "content": "Open.",
+      "timestamp": "2026-04-25T13:40:10.336207+00:00",
+      "is_kickoff": true,
+      "partial": false
+    }
+  ],
+  "summaries": {
+    "short": "",
+    "chapters": [],
+    "arc": "",
+    "last_short_update_turn": 0,
+    "last_chapter_rollup_turn": 0
+  },
+  "side_effects": {
+    "msg_9b81ae802c86": {
+      "memory_ids": [
+        "mem_b2af441231a3"
+      ],
+      "reversal": {
+        "stats_changes": {},
+        "location_before": null,
+        "inventory_to_remove": [],
+        "inventory_to_restore": [],
+        "npc_reversals": []
+      },
+      "status": "complete",
+      "error": ""
+    }
+  },
+  "events": [
+    {
+      "id": "evt_02e49f527f",
+      "timestamp": "2026-04-25T13:40:10.297262+00:00",
+      "type": "campaign.init",
+      "message": "Campaign created."
+    },
+    {
+      "id": "evt_863739bff1",
+      "timestamp": "2026-04-25T13:40:10.336240+00:00",
+      "type": "turn.stream.complete",
+      "message": "GM message msg_9b81ae802c86 saved with stop_reason=stop."
+    },
+    {
+      "id": "evt_373699a3cc",
+      "timestamp": "2026-04-25T13:40:10.814833+00:00",
+      "type": "turn.postprocess.complete",
+      "message": "Post-turn updates complete for msg_9b81ae802c86."
+    },
+    {
+      "id": "evt_a16aa7ceb3",
+      "timestamp": "2026-04-25T13:40:11.291511+00:00",
+      "type": "turn.stream.complete",
+      "message": "GM message msg_665293e7deaf saved with stop_reason=stop."
+    },
+    {
+      "id": "evt_4a6bdc2419",
+      "timestamp": "2026-04-25T13:40:11.742755+00:00",
+      "type": "turn.postprocess.complete",
+      "message": "Post-turn updates complete for msg_665293e7deaf."
+    }
+  ],
+  "stat_bounds": {
+    "Health": {
+      "min": 0,
+      "max": 9999
+    },
+    "Gold": {
+      "min": 0,
+      "max": 9999
+    }
+  },
+  "sampling_overrides": {
+    "temperature": null,
+    "repeat_penalty": null,
+    "top_p": null,
+    "top_k": null,
+    "min_p": null,
+    "num_predict": null
+  }
+}

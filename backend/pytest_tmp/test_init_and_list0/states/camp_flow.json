@@ -1,0 +1,79 @@
+{
+  "schema_version": 2,
+  "campaign_id": "camp_flow",
+  "created_at": "2026-04-25T13:40:06.761432+00:00",
+  "updated_at": "2026-04-25T13:40:06.761621+00:00",
+  "revision": 1,
+  "models": {
+    "gm": "llama3",
+    "utility": "llama3",
+    "nsfw_world_gen": false
+  },
+  "player": {
+    "name": "Hero",
+    "location": "The Village",
+    "stats": {
+      "Health": 100,
+      "Gold": 50
+    },
+    "inventory": [
+      "Sword"
+    ]
+  },
+  "npcs": [
+    {
+      "name": "Elena",
+      "disposition": "Neutral",
+      "secrets_known": []
+    }
+  ],
+  "lorebook": {
+    "Magic": "Magic is rare."
+  },
+  "world_description": "A misty valley of ancient runes.",
+  "starting_scene": "You wake in a cold tavern.",
+  "rules": {
+    "enabled": true,
+    "dice_mode": "d20",
+    "default_dc": 12,
+    "tone": "dark fantasy",
+    "response_length": "concise"
+  },
+  "quests": [],
+  "conditions": [],
+  "messages": [],
+  "summaries": {
+    "short": "",
+    "chapters": [],
+    "arc": "",
+    "last_short_update_turn": 0,
+    "last_chapter_rollup_turn": 0
+  },
+  "side_effects": {},
+  "events": [
+    {
+      "id": "evt_a6468d69a9",
+      "timestamp": "2026-04-25T13:40:06.761485+00:00",
+      "type": "campaign.init",
+      "message": "Campaign created."
+    }
+  ],
+  "stat_bounds": {
+    "Health": {
+      "min": 0,
+      "max": 9999
+    },
+    "Gold": {
+      "min": 0,
+      "max": 9999
+    }
+  },
+  "sampling_overrides": {
+    "temperature": null,
+    "repeat_penalty": null,
+    "top_p": null,
+    "top_k": null,
+    "min_p": null,
+    "num_predict": null
+  }
+}

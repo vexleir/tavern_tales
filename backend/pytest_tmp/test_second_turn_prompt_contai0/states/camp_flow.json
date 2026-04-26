@@ -1,0 +1,169 @@
+{
+  "schema_version": 2,
+  "campaign_id": "camp_flow",
+  "created_at": "2026-04-25T13:40:07.842534+00:00",
+  "updated_at": "2026-04-25T13:40:09.260942+00:00",
+  "revision": 5,
+  "models": {
+    "gm": "llama3",
+    "utility": "llama3",
+    "nsfw_world_gen": false
+  },
+  "player": {
+    "name": "Hero",
+    "location": "The Village",
+    "stats": {
+      "Health": 100,
+      "Gold": 50
+    },
+    "inventory": [
+      "Sword"
+    ]
+  },
+  "npcs": [
+    {
+      "name": "Elena",
+      "disposition": "Neutral",
+      "secrets_known": []
+    }
+  ],
+  "lorebook": {
+    "Magic": "Magic is rare."
+  },
+  "world_description": "A misty valley of ancient runes.",
+  "starting_scene": "You wake in a cold tavern.",
+  "rules": {
+    "enabled": true,
+    "dice_mode": "d20",
+    "default_dc": 12,
+    "tone": "dark fantasy",
+    "response_length": "concise"
+  },
+  "quests": [],
+  "conditions": [],
+  "messages": [
+    {
+      "id": "msg_b6599d87b290",
+      "turn_id": "turn_bb5a4c300613",
+      "role": "user",
+      "content": "Begin the scene. Narrate the opening in vivid detail using the world, scene, and protagonist context provided. End at a decision point.",
+      "timestamp": "2026-04-25T13:40:07.866359+00:00",
+      "is_kickoff": true,
+      "partial": false
+    },
+    {
+      "id": "msg_46ad7a41c43d",
+      "turn_id": "turn_bb5a4c300613",
+      "role": "assistant",
+      "content": "Opening narration.",
+      "timestamp": "2026-04-25T13:40:07.866372+00:00",
+      "is_kickoff": true,
+      "partial": false
+    },
+    {
+      "id": "msg_4ab546643e43",
+      "turn_id": "turn_c9cf543e6fbc",
+      "role": "user",
+      "content": "I draw my sword.",
+      "timestamp": "2026-04-25T13:40:08.805406+00:00",
+      "is_kickoff": false,
+      "partial": false
+    },
+    {
+      "id": "msg_27be28678177",
+      "turn_id": "turn_c9cf543e6fbc",
+      "role": "assistant",
+      "content": "Your sword rings as you draw it.",
+      "timestamp": "2026-04-25T13:40:08.805432+00:00",
+      "is_kickoff": false,
+      "partial": false
+    }
+  ],
+  "summaries": {
+    "short": "",
+    "chapters": [],
+    "arc": "",
+    "last_short_update_turn": 0,
+    "last_chapter_rollup_turn": 0
+  },
+  "side_effects": {
+    "msg_46ad7a41c43d": {
+      "memory_ids": [
+        "mem_084105d218fd"
+      ],
+      "reversal": {
+        "stats_changes": {},
+        "location_before": null,
+        "inventory_to_remove": [],
+        "inventory_to_restore": [],
+        "npc_reversals": []
+      },
+      "status": "complete",
+      "error": ""
+    },
+    "msg_27be28678177": {
+      "memory_ids": [
+        "mem_305914617cd2"
+      ],
+      "reversal": {
+        "stats_changes": {},
+        "location_before": null,
+        "inventory_to_remove": [],
+        "inventory_to_restore": [],
+        "npc_reversals": []
+      },
+      "status": "complete",
+      "error": ""
+    }
+  },
+  "events": [
+    {
+      "id": "evt_733eba530e",
+      "timestamp": "2026-04-25T13:40:07.842581+00:00",
+      "type": "campaign.init",
+      "message": "Campaign created."
+    },
+    {
+      "id": "evt_7a404ede5b",
+      "timestamp": "2026-04-25T13:40:07.866393+00:00",
+      "type": "turn.stream.complete",
+      "message": "GM message msg_46ad7a41c43d saved with stop_reason=stop."
+    },
+    {
+      "id": "evt_845acbd0f9",
+      "timestamp": "2026-04-25T13:40:08.403549+00:00",
+      "type": "turn.postprocess.complete",
+      "message": "Post-turn updates complete for msg_46ad7a41c43d."
+    },
+    {
+      "id": "evt_dd3579affe",
+      "timestamp": "2026-04-25T13:40:08.805485+00:00",
+      "type": "turn.stream.complete",
+      "message": "GM message msg_27be28678177 saved with stop_reason=stop."
+    },
+    {
+      "id": "evt_7141dd1f50",
+      "timestamp": "2026-04-25T13:40:09.260765+00:00",
+      "type": "turn.postprocess.complete",
+      "message": "Post-turn updates complete for msg_27be28678177."
+    }
+  ],
+  "stat_bounds": {
+    "Health": {
+      "min": 0,
+      "max": 9999
+    },
+    "Gold": {
+      "min": 0,
+      "max": 9999
+    }
+  },
+  "sampling_overrides": {
+    "temperature": null,
+    "repeat_penalty": null,
+    "top_p": null,
+    "top_k": null,
+    "min_p": null,
+    "num_predict": null
+  }
+}

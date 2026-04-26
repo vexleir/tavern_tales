@@ -1,0 +1,72 @@
+{
+  "schema_version": 2,
+  "campaign_id": "camp_d",
+  "created_at": "2026-04-25T13:40:21.812342+00:00",
+  "updated_at": "2026-04-25T13:40:21.812513+00:00",
+  "revision": 1,
+  "models": {
+    "gm": "test-gm",
+    "utility": "test-utility",
+    "nsfw_world_gen": false
+  },
+  "player": {
+    "name": "Hero",
+    "location": "Tavern",
+    "stats": {
+      "Health": 100,
+      "Gold": 50
+    },
+    "inventory": []
+  },
+  "npcs": [
+    {
+      "name": "Elena",
+      "disposition": "Neutral",
+      "secrets_known": [
+        "knows a song"
+      ]
+    }
+  ],
+  "lorebook": {
+    "Magic": "Magic is forbidden."
+  },
+  "world_description": "A grim realm.",
+  "starting_scene": "You stand at a crossroads.",
+  "rules": {
+    "enabled": true,
+    "dice_mode": "d20",
+    "default_dc": 12,
+    "tone": "dark fantasy",
+    "response_length": "concise"
+  },
+  "quests": [],
+  "conditions": [],
+  "messages": [],
+  "summaries": {
+    "short": "",
+    "chapters": [],
+    "arc": "",
+    "last_short_update_turn": 0,
+    "last_chapter_rollup_turn": 0
+  },
+  "side_effects": {},
+  "events": [],
+  "stat_bounds": {
+    "Health": {
+      "min": 0,
+      "max": 9999
+    },
+    "Gold": {
+      "min": 0,
+      "max": 9999
+    }
+  },
+  "sampling_overrides": {
+    "temperature": null,
+    "repeat_penalty": null,
+    "top_p": null,
+    "top_k": null,
+    "min_p": null,
+    "num_predict": null
+  }
+}
