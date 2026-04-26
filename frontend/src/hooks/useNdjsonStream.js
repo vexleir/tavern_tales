@@ -14,6 +14,7 @@ export default function useNdjsonStream({ onError, onAbortWithTokens } = {}) {
     try {
       const res = await fetch(apiUrl(url), {
         method: 'POST',
+        cache: 'no-store',
         headers: { 'Content-Type': 'application/json' },
         body: body ? JSON.stringify(body) : undefined,
         signal: abortRef.current.signal

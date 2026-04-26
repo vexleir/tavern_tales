@@ -58,6 +58,7 @@ def test_init_and_list(client):
     _init_campaign(c)
     r = c.get("/api/campaigns")
     assert r.status_code == 200
+    assert "no-store" in r.headers["cache-control"]
     listing = r.json()
     assert any(x["id"] == "camp_flow" for x in listing)
 
@@ -260,6 +261,19 @@ def test_debug_bundle_contains_state_prompt_and_events(client):
     event_types = [e["type"] for e in bundle["recent_events"]]
     assert "campaign.init" in event_types
     assert "turn.stream.complete" in event_types
+
+
+def test_delete_campaign_clears_cached_prompt(client):
+    c, mo = client
+    _init_campaign(c)
+
+    mo.set_stream_text("Opening narration.")
+    _consume_stream(c.post("/api/campaign/camp_flow/kickoff"))
+
+    assert c.get("/api/campaign/camp_flow/last_prompt").json()["available"] is True
+    r = c.delete("/api/campaigns/camp_flow")
+    assert r.status_code == 200
+    assert c.get("/api/campaign/camp_flow/last_prompt").json()["available"] is False
 
 
 def test_input_size_limit_enforced(client):

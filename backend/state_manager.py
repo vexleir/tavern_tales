@@ -212,10 +212,21 @@ async def list_campaigns() -> list[CampaignSummary]:
 async def delete_campaign(campaign_id: str) -> bool:
     path = _path_for(campaign_id)
     async with campaign_lock(campaign_id):
-        if path.exists():
-            path.unlink()
-            return True
-    return False
+        removed = False
+        candidates = {
+            path,
+            path.with_suffix(path.suffix + ".tmp"),
+        }
+        candidates.update(STATES_DIR.glob(f"{campaign_id}.corrupt-*.bak"))
+        candidates.update(STATES_DIR.glob(f"{campaign_id}.json.corrupt-*.bak"))
+        for candidate in candidates:
+            try:
+                if candidate.exists():
+                    candidate.unlink()
+                    removed = True
+            except OSError as e:
+                log.warning("Failed to delete campaign artifact %s: %s", candidate.name, e)
+        return removed
 
 
 # ---------------------------------------------------------------------------

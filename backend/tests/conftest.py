@@ -51,7 +51,11 @@ def temp_chroma(tmp_path, monkeypatch):
 
     import memory
 
-    fresh = chromadb.PersistentClient(path=str(tmp_path / "chroma_db"))
+    monkeypatch.setattr(memory, "DB_PATH", str(tmp_path / "chroma_db"))
+    fresh = chromadb.PersistentClient(
+        path=str(tmp_path / "chroma_db"),
+        settings=chromadb.Settings(anonymized_telemetry=False),
+    )
     monkeypatch.setattr(memory, "_client", fresh)
     return fresh
 

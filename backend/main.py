@@ -54,7 +54,11 @@ app = FastAPI(title="Tavern Tales Reborn GM Engine")
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:5173"],  # tightened in D1
+    allow_origins=[
+        "http://localhost:5173",
+        "http://127.0.0.1:5173",
+        "http://[::1]:5173",
+    ],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -73,6 +77,21 @@ async def request_id_middleware(request, call_next):
     try:
         response = await call_next(request)
         response.headers["X-Request-Id"] = req_id
+        response.headers["Cache-Control"] = "no-store, no-cache, max-age=0, must-revalidate, private"
+        response.headers["Pragma"] = "no-cache"
+        response.headers["Expires"] = "0"
+        response.headers["X-Content-Type-Options"] = "nosniff"
+        response.headers["Referrer-Policy"] = "no-referrer"
+        response.headers["Permissions-Policy"] = "camera=(), microphone=(), geolocation=()"
+        response.headers["Content-Security-Policy"] = (
+            "default-src 'self'; "
+            "connect-src 'self' http://localhost:* http://127.0.0.1:* http://[::1]:* "
+            "ws://localhost:* ws://127.0.0.1:* ws://[::1]:*; "
+            "img-src 'self' data: blob:; "
+            "style-src 'self' 'unsafe-inline'; "
+            "script-src 'self'; "
+            "object-src 'none'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'"
+        )
         return response
     finally:
         request_id_ctx.reset(token)
@@ -81,6 +100,7 @@ async def request_id_middleware(request, call_next):
 @app.on_event("startup")
 async def _startup() -> None:
     await state_manager.initialize()
+    memory.purge_deleted_memory_artifacts()
     log.info("Tavern Tales backend started (schema v%d).", SCHEMA_VERSION)
 
 
@@ -219,6 +239,7 @@ async def delete_campaign(campaign_id: str):
     campaign_id_ctx.set(campaign_id)
     deleted = await state_manager.delete_campaign(campaign_id)
     memory.delete_campaign_memory(campaign_id)
+    _LAST_PROMPT.pop(campaign_id, None)
     return {"status": "success" if deleted else "not_found"}
 
 

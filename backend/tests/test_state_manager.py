@@ -43,6 +43,20 @@ async def test_list_and_delete(temp_state_dir, new_state):
 
 
 @pytest.mark.asyncio
+async def test_delete_campaign_removes_related_artifacts(temp_state_dir, new_state):
+    await state_manager.save_state(new_state("camp_priv"))
+    states = temp_state_dir / "states"
+    (states / "camp_priv.json.tmp").write_text("partial", encoding="utf-8")
+    (states / "camp_priv.corrupt-123.bak").write_text("private old data", encoding="utf-8")
+
+    assert await state_manager.delete_campaign("camp_priv") is True
+
+    assert not (states / "camp_priv.json").exists()
+    assert not (states / "camp_priv.json.tmp").exists()
+    assert not (states / "camp_priv.corrupt-123.bak").exists()
+
+
+@pytest.mark.asyncio
 async def test_mutate_state_serializes_concurrent_writes(temp_state_dir, new_state):
     """Two concurrent mutators should apply both; no lost writes."""
     await state_manager.save_state(new_state("camp_c", stats={"Health": 100}))

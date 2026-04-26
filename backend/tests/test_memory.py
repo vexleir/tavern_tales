@@ -38,11 +38,14 @@ def test_per_message_deletion(temp_chroma):
     _ = mid2  # used implicitly — second memory should survive
 
 
-def test_delete_campaign_drops_collection(temp_chroma):
+def test_delete_campaign_drops_collection(temp_chroma, tmp_path):
     memory.add_memory("camp_del", msg_id="m", content="Something.", turn=1)
+    segment_dirs = [p for p in (tmp_path / "chroma_db").iterdir() if p.is_dir()]
+    assert segment_dirs
     memory.delete_campaign_memory("camp_del")
     # Querying a dropped collection returns empty rather than raising.
     assert memory.retrieve_relevant_memories("camp_del", "Something") == []
+    assert not any(p.exists() for p in segment_dirs)
 
 
 def test_retrieve_on_empty_campaign_returns_empty(temp_chroma):

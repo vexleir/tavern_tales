@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { apiUrl, parseErrorResponse } from './lib/api';
+import { apiFetch, parseErrorResponse } from './lib/api';
 
 export default function CampaignCreator({ campaignId, onComplete }) {
   const [protagonist, setProtagonist] = useState({
@@ -33,12 +33,17 @@ export default function CampaignCreator({ campaignId, onComplete }) {
   const [submitError, setSubmitError] = useState('');
 
   useEffect(() => {
-    fetch(apiUrl('/api/models'))
+    try {
+      window.localStorage?.removeItem('tt_preferred_gm');
+      window.localStorage?.removeItem('tt_preferred_utility');
+    } catch {
+      // Privacy mode or disabled storage: nothing to clear.
+    }
+
+    apiFetch('/api/models')
       .then(r => r.json())
       .then(data => {
         setAvailableModels(data);
-        const savedGm = localStorage.getItem('tt_preferred_gm');
-        const savedUtil = localStorage.getItem('tt_preferred_utility');
         const utilityPreferences = [
           'llama3.1:8b-instruct',
           'llama3.1:8b-instruct:latest',
@@ -53,17 +58,11 @@ export default function CampaignCreator({ campaignId, onComplete }) {
           'llama3',
           'llama3:latest'
         ];
-        const gmChoice = savedGm && data.includes(savedGm) ? savedGm : (data[0] || '');
-        const isKnownUtility = (name) => utilityPreferences.includes(name);
+        const gmChoice = data[0] || '';
         setGmModel(gmChoice);
 
-        if (savedUtil && data.includes(savedUtil) && (isKnownUtility(savedUtil) || savedUtil !== gmChoice)) {
-          setUtilityModel(savedUtil);
-        }
-        else {
-          const match = utilityPreferences.find(m => data.includes(m));
-          setUtilityModel(match || '');
-        }
+        const match = utilityPreferences.find(m => data.includes(m));
+        setUtilityModel(match || '');
       })
       .catch(err => console.error('Model list fetch failed:', err));
   }, []);
@@ -73,7 +72,7 @@ export default function CampaignCreator({ campaignId, onComplete }) {
     setSubmitError('');
     setIsGenerating(true);
     try {
-       const res = await fetch(apiUrl('/api/world/generate'), {
+       const res = await apiFetch('/api/world/generate', {
           method: 'POST',
           headers: {'Content-Type':'application/json'},
           body: JSON.stringify({
@@ -108,14 +107,10 @@ export default function CampaignCreator({ campaignId, onComplete }) {
 
   const handleGmModelChange = (value) => {
     setGmModel(value);
-    if (value) localStorage.setItem('tt_preferred_gm', value);
-    else localStorage.removeItem('tt_preferred_gm');
   };
 
   const handleUtilityModelChange = (value) => {
     setUtilityModel(value);
-    if (value) localStorage.setItem('tt_preferred_utility', value);
-    else localStorage.removeItem('tt_preferred_utility');
   };
 
   const addNpc = () => {
@@ -137,9 +132,6 @@ export default function CampaignCreator({ campaignId, onComplete }) {
       return;
     }
     try {
-      localStorage.setItem('tt_preferred_gm', gmModel);
-      if (utilityModel) localStorage.setItem('tt_preferred_utility', utilityModel);
-
       const payload = {
         campaign_id: campaignId || `campaign_${Date.now()}`,
         player_name: protagonist.name,
@@ -156,7 +148,7 @@ export default function CampaignCreator({ campaignId, onComplete }) {
         nsfw_world_gen: nsfwWorldGen
       };
 
-      const res = await fetch(apiUrl('/api/campaign/init'), {
+      const res = await apiFetch('/api/campaign/init', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(payload)

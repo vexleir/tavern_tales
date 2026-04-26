@@ -5,7 +5,7 @@ import ModalProvider from './components/ModalProvider';
 import useBanner from './hooks/useBanner';
 import useModal from './hooks/useModal';
 import useNdjsonStream from './hooks/useNdjsonStream';
-import { apiUrl } from './lib/api';
+import { apiFetch } from './lib/api';
 
 const createCampaignId = () => `campaign_${Date.now()}`;
 
@@ -33,7 +33,7 @@ function AppInner() {
 
   const refreshState = useCallback(async (id) => {
     try {
-      const res = await fetch(apiUrl(`/api/state/${id}`));
+      const res = await apiFetch(`/api/state/${id}`);
       if (!res.ok) return null;
       const data = await res.json();
       setCampaignState(data);
@@ -53,7 +53,7 @@ function AppInner() {
 
   useEffect(() => {
     if (appMode === 'menu') {
-      fetch(apiUrl('/api/campaigns'))
+      apiFetch('/api/campaigns')
         .then(r => r.json())
         .then(setSavedCampaigns)
         .catch(e => banner.error(`Could not list campaigns: ${e.message}`));
@@ -154,7 +154,7 @@ function AppInner() {
     });
     if (!ok) return;
     try {
-      const res = await fetch(apiUrl(`/api/campaign/${activeCampaignId}/message/${msgId}`), { method: 'DELETE' });
+      const res = await apiFetch(`/api/campaign/${activeCampaignId}/message/${msgId}`, { method: 'DELETE' });
       if (!res.ok) {
         banner.error('Delete failed');
         return;
@@ -186,8 +186,18 @@ function AppInner() {
     });
     if (!ok) return;
     try {
-      await fetch(apiUrl(`/api/campaigns/${id}`), { method: 'DELETE' });
-      const res = await fetch(apiUrl('/api/campaigns'));
+      await apiFetch(`/api/campaigns/${id}`, { method: 'DELETE' });
+      if (id === activeCampaignId) {
+        setCampaignState(null);
+        setMessages([]);
+        setPromptStats(null);
+        setLastPrompt(null);
+        setLastResolution(null);
+        setUndoStack([]);
+        setInspectorOpen(false);
+        setAppMode('menu');
+      }
+      const res = await apiFetch('/api/campaigns');
       setSavedCampaigns(await res.json());
     } catch (err) {
       banner.error(`Delete failed: ${err.message}`);
@@ -196,7 +206,7 @@ function AppInner() {
 
   const handleFork = async () => {
     try {
-      const res = await fetch(apiUrl(`/api/campaigns/${activeCampaignId}/fork`), { method: 'POST' });
+      const res = await apiFetch(`/api/campaigns/${activeCampaignId}/fork`, { method: 'POST' });
       if (res.ok) {
         const data = await res.json();
         if (data.status === 'success') {
@@ -221,7 +231,7 @@ function AppInner() {
     pushUndo({ before, description });
     setCampaignState(next);
     try {
-      const res = await fetch(apiUrl(`/api/state/${activeCampaignId}`), {
+      const res = await apiFetch(`/api/state/${activeCampaignId}`, {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ expected_revision: before.revision, ...patch })
@@ -250,7 +260,7 @@ function AppInner() {
     setUndoStack(s => s.slice(0, -1));
     setCampaignState(last.before);
     try {
-      const res = await fetch(apiUrl(`/api/state/${activeCampaignId}`), {
+      const res = await apiFetch(`/api/state/${activeCampaignId}`, {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -334,7 +344,7 @@ function AppInner() {
 
   const handleExport = async () => {
     try {
-      const res = await fetch(apiUrl(`/api/campaign/${activeCampaignId}/export`));
+      const res = await apiFetch(`/api/campaign/${activeCampaignId}/export`);
       if (!res.ok) { banner.error('Export failed'); return; }
       const blob = await res.blob();
       const url = URL.createObjectURL(blob);
@@ -350,7 +360,7 @@ function AppInner() {
 
   const handleDebugExport = async () => {
     try {
-      const res = await fetch(apiUrl(`/api/campaign/${activeCampaignId}/debug`));
+      const res = await apiFetch(`/api/campaign/${activeCampaignId}/debug`);
       if (!res.ok) { banner.error('Debug export failed'); return; }
       const blob = await res.blob();
       const url = URL.createObjectURL(blob);
@@ -368,7 +378,7 @@ function AppInner() {
     try {
       const text = await file.text();
       const payload = JSON.parse(text);
-      const res = await fetch(apiUrl('/api/campaign/import'), {
+      const res = await apiFetch('/api/campaign/import', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ state: payload.state, memories: payload.memories })
@@ -376,7 +386,7 @@ function AppInner() {
       if (!res.ok) { banner.error('Import failed'); return; }
       const { campaign_id } = await res.json();
       banner.info(`Imported campaign ${campaign_id}`);
-      const list = await fetch(apiUrl('/api/campaigns'));
+      const list = await apiFetch('/api/campaigns');
       setSavedCampaigns(await list.json());
     } catch (e) {
       banner.error(`Import failed: ${e.message}`);
@@ -387,7 +397,7 @@ function AppInner() {
 
   const openInspector = async () => {
     try {
-      const res = await fetch(apiUrl(`/api/campaign/${activeCampaignId}/last_prompt`));
+      const res = await apiFetch(`/api/campaign/${activeCampaignId}/last_prompt`);
       if (res.ok) {
         const data = await res.json();
         if (data.available) {
