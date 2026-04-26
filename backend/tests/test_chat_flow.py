@@ -268,3 +268,71 @@ def test_input_size_limit_enforced(client):
     long_msg = "x" * 5000
     r = c.post("/api/chat/stream", json={"campaign_id": "camp_flow", "user_message": long_msg})
     assert r.status_code == 422  # Pydantic validation failure
+
+
+def test_world_generation_uses_utility_model(client):
+    c, mo = client
+    mo.set_json({
+        "world_description": "A moonlit city.",
+        "starting_scene": "You stand beneath silver banners.",
+        "player_starting_location": "Moon Gate",
+        "story_summary": "The city is tense.",
+        "lorebook": [],
+        "npcs": [],
+    })
+
+    r = c.post("/api/world/generate", json={
+        "prompt": "a moon court mystery",
+        "gm_model": "narrator-model",
+        "utility_model": "utility-json-model",
+        "model": "legacy-world-model",
+    })
+
+    assert r.status_code == 200
+    assert mo.json_calls[-1]["model"] == "utility-json-model"
+
+
+def test_world_generation_ignores_legacy_narrator_model(client):
+    from model_resolver import DEFAULT_CREATIVE_MODEL
+
+    c, mo = client
+    mo.set_json({
+        "world_description": "A clockwork coast.",
+        "starting_scene": "You stand beside a brass lighthouse.",
+        "player_starting_location": "Brass Lighthouse",
+        "story_summary": "The coast is changing.",
+        "lorebook": [],
+        "npcs": [],
+    })
+
+    r = c.post("/api/world/generate", json={
+        "prompt": "a clockwork coast",
+        "model": "narrator-model",
+    })
+
+    assert r.status_code == 200
+    assert mo.json_calls[-1]["model"] == DEFAULT_CREATIVE_MODEL
+
+
+def test_world_generation_nsfw_toggle_uses_creative_model(client):
+    from model_resolver import NSFW_CREATIVE_MODEL
+
+    c, mo = client
+    mo.set_json({
+        "world_description": "A dangerous realm.",
+        "starting_scene": "You wake beside a red lantern.",
+        "player_starting_location": "Lantern Alley",
+        "story_summary": "The realm is dangerous.",
+        "lorebook": [],
+        "npcs": [],
+    })
+
+    r = c.post("/api/world/generate", json={
+        "prompt": "an adult dark-fantasy city",
+        "nsfw": True,
+        "gm_model": "narrator-model",
+        "utility_model": "utility-json-model",
+    })
+
+    assert r.status_code == 200
+    assert mo.json_calls[-1]["model"] == NSFW_CREATIVE_MODEL

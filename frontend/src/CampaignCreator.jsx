@@ -42,17 +42,27 @@ export default function CampaignCreator({ campaignId, onComplete }) {
         const utilityPreferences = [
           'llama3.1:8b-instruct',
           'llama3.1:8b-instruct:latest',
+          'llama3.1:8b',
+          'llama3.1:8b:latest',
           'qwen2.5:7b-instruct',
           'qwen2.5:7b-instruct:latest',
-          'llama3:8b'
+          'qwen2.5:7b',
+          'qwen2.5:7b:latest',
+          'llama3:8b',
+          'llama3:8b:latest',
+          'llama3',
+          'llama3:latest'
         ];
-        if (savedGm && data.includes(savedGm)) setGmModel(savedGm);
-        else if (data.length > 0) setGmModel(data[0]);
+        const gmChoice = savedGm && data.includes(savedGm) ? savedGm : (data[0] || '');
+        const isKnownUtility = (name) => utilityPreferences.includes(name);
+        setGmModel(gmChoice);
 
-        if (savedUtil && data.includes(savedUtil)) setUtilityModel(savedUtil);
+        if (savedUtil && data.includes(savedUtil) && (isKnownUtility(savedUtil) || savedUtil !== gmChoice)) {
+          setUtilityModel(savedUtil);
+        }
         else {
           const match = utilityPreferences.find(m => data.includes(m));
-          setUtilityModel(match || (data[0] || ''));
+          setUtilityModel(match || '');
         }
       })
       .catch(err => console.error('Model list fetch failed:', err));
@@ -60,12 +70,18 @@ export default function CampaignCreator({ campaignId, onComplete }) {
 
   const handleGenerateWorld = async () => {
     if (!worldPrompt.trim()) return;
+    setSubmitError('');
     setIsGenerating(true);
     try {
        const res = await fetch(apiUrl('/api/world/generate'), {
           method: 'POST',
           headers: {'Content-Type':'application/json'},
-          body: JSON.stringify({ prompt: worldPrompt, nsfw: nsfwWorldGen, model: gmModel || null })
+          body: JSON.stringify({
+             prompt: worldPrompt,
+             nsfw: nsfwWorldGen,
+             gm_model: gmModel || null,
+             utility_model: utilityModel || null
+          })
        });
        if(res.ok) {
           const data = await res.json();

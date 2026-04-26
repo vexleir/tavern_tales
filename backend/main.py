@@ -26,6 +26,7 @@ from pydantic import BaseModel, Field
 import extraction
 import game_rules
 import memory
+import model_resolver
 import prompt_builder
 import state_manager
 import summarizer
@@ -117,6 +118,10 @@ class InitCampaignRequest(BaseModel):
 class GenerateWorldRequest(BaseModel):
     prompt: str = Field(..., min_length=1, max_length=8000)
     nsfw: bool = False
+    gm_model: str | None = None
+    utility_model: str | None = None
+    # Legacy clients sent the narrator model here. Keep accepting the field,
+    # but don't use it as the world-generation model.
     model: str | None = None
 
 
@@ -715,13 +720,20 @@ async def regenerate_message(campaign_id: str, msg_id: str):
 
 @app.post("/api/world/generate")
 async def generate_world(req: GenerateWorldRequest):
-    # Decide which model to use (A11 + C11).
-    if req.model:
-        model = req.model
-    elif req.nsfw:
+    # World generation needs reliable JSON, so route it through the utility
+    # fallback chain. Stale clients may still send `model` as the narrator;
+    # treat that only as a GM hint, never as the world-gen model itself.
+    if req.nsfw:
         model = NSFW_CREATIVE_MODEL
     else:
-        model = DEFAULT_CREATIVE_MODEL
+        gm_hint = req.gm_model or req.model or ""
+        preferred_utility = req.utility_model or DEFAULT_CREATIVE_MODEL
+        if gm_hint and preferred_utility == gm_hint:
+            preferred_utility = DEFAULT_CREATIVE_MODEL
+        model = await model_resolver.resolve_utility_model(
+            preferred_utility,
+            DEFAULT_CREATIVE_MODEL,
+        )
 
     sys_prompt = f"""You are an expert worldbuilder for a text RPG. Expand the user's vague concept into a richly detailed starting state.
 
