@@ -28,9 +28,19 @@ def _init_campaign(client, campaign_id: str = "camp_flow"):
         "campaign_id": campaign_id,
         "player_name": "Hero",
         "starting_location": "The Village",
+        "player_gender": "NB",
+        "player_appearance": "Lean, hooded, ash-streaked cloak.",
+        "player_description": "A wanderer hunting their own forgotten name.",
         "stats": {"Health": 100, "Gold": 50},
         "inventory": ["Sword"],
-        "npcs": [{"name": "Elena", "disposition": "Neutral", "secrets_known": []}],
+        "npcs": [{
+            "name": "Elena",
+            "disposition": "Neutral",
+            "gender": "F",
+            "appearance": "Auburn hair, leather apron.",
+            "description": "Tavernkeeper who hears every rumor.",
+            "secrets_known": []
+        }],
         "lorebook": {"Magic": "Magic is rare."},
         "story_summary": "",
         "world_description": "A misty valley of ancient runes.",
@@ -101,6 +111,10 @@ def test_second_turn_prompt_contains_world(client):
     assert "Hero" in system_content  # protagonist
     assert "Elena" in system_content  # cast
     assert "Magic" in system_content  # lorebook
+    assert "ash-streaked cloak" in system_content  # player appearance
+    assert "forgotten name" in system_content  # player description
+    assert "leather apron" in system_content  # NPC appearance
+    assert "every rumor" in system_content  # NPC description
 
 
 def test_message_ids_assigned_and_saved(client, temp_state_dir):

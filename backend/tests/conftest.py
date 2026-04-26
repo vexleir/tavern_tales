@@ -114,8 +114,8 @@ class MockOllama:
             yield {"type": "token", "data": text[mid:]}
         yield {"type": "done", "stop_reason": self._stream_stop_reason}
 
-    async def complete_json(self, messages, model, timeout=60.0):
-        self.json_calls.append({"messages": messages, "model": model})
+    async def complete_json(self, messages, model, timeout=60.0, num_predict=768):
+        self.json_calls.append({"messages": messages, "model": model, "num_predict": num_predict})
         return self._json_payload
 
     async def complete_text(self, messages, model, timeout=60.0, num_predict=512):

@@ -27,7 +27,8 @@
       "Bash(curl -s -X DELETE http://localhost:8765/api/campaigns/smoke_test)",
       "Bash(kill %1)",
       "Bash(awk '{print $2}')",
-      "Bash(xargs -r kill)"
+      "Bash(xargs -r kill)",
+      "Bash(python -m pytest -q)"
     ]
   }
 }

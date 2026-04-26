@@ -117,6 +117,7 @@ async def complete_json(
     messages: list[dict[str, str]],
     model: str,
     timeout: float = 60.0,
+    num_predict: int = 768,
 ) -> dict[str, Any] | None:
     """
     Non-streaming JSON-mode completion for utility tasks (extraction, summarization).
@@ -128,7 +129,7 @@ async def complete_json(
         "messages": messages,
         "stream": False,
         "format": "json",
-        "options": {"temperature": 0.2, "num_predict": 768},
+        "options": {"temperature": 0.2, "num_predict": num_predict},
     }
     try:
         async with httpx.AsyncClient() as client:

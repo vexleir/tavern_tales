@@ -4,7 +4,10 @@ import { apiFetch, parseErrorResponse } from './lib/api';
 export default function CampaignCreator({ campaignId, onComplete }) {
   const [protagonist, setProtagonist] = useState({
     name: 'Traveler',
-    location: 'The Ember & Ash Tavern'
+    location: 'The Ember & Ash Tavern',
+    gender: 'Unspecified',
+    appearance: '',
+    description: ''
   });
 
   const [stats, setStats] = useState([{ name: 'Health', value: 100 }, { name: 'Gold', value: 50 }]);
@@ -17,7 +20,14 @@ export default function CampaignCreator({ campaignId, onComplete }) {
   const [newLore, setNewLore] = useState({ keyword: '', rule: '' });
 
   const [npcs, setNpcs] = useState([]);
-  const [newNpc, setNewNpc] = useState({ name: '', disposition: 'Neutral', secret: '' });
+  const [newNpc, setNewNpc] = useState({
+    name: '',
+    disposition: 'Neutral',
+    gender: 'Unspecified',
+    appearance: '',
+    description: '',
+    secret: ''
+  });
 
   const [worldPrompt, setWorldPrompt] = useState('');
   const [isGenerating, setIsGenerating] = useState(false);
@@ -84,10 +94,19 @@ export default function CampaignCreator({ campaignId, onComplete }) {
        });
        if(res.ok) {
           const data = await res.json();
-          if(data.player_starting_location) setProtagonist(p => ({...p, location: data.player_starting_location}));
+          setProtagonist(p => ({
+            ...p,
+            location: data.player_starting_location || p.location,
+            gender: data.player_gender || p.gender,
+            appearance: data.player_appearance || p.appearance,
+            description: data.player_description || p.description
+          }));
           if(data.npcs) setNpcs(data.npcs.map(n => ({
              name: n.name,
              disposition: n.disposition,
+             gender: n.gender || 'Unspecified',
+             appearance: n.appearance || '',
+             description: n.description || '',
              secrets_known: n.secrets_known || []
           })));
           if(data.lorebook) setLorebook(data.lorebook);
@@ -118,9 +137,12 @@ export default function CampaignCreator({ campaignId, onComplete }) {
     setNpcs([...npcs, {
       name: newNpc.name,
       disposition: newNpc.disposition,
+      gender: newNpc.gender,
+      appearance: newNpc.appearance,
+      description: newNpc.description,
       secrets_known: newNpc.secret ? [newNpc.secret] : []
     }]);
-    setNewNpc({ name: '', disposition: 'Neutral', secret: '' });
+    setNewNpc({ name: '', disposition: 'Neutral', gender: 'Unspecified', appearance: '', description: '', secret: '' });
   };
 
   const removeNpc = (idx) => setNpcs(npcs.filter((_, i) => i !== idx));
@@ -136,6 +158,9 @@ export default function CampaignCreator({ campaignId, onComplete }) {
         campaign_id: campaignId || `campaign_${Date.now()}`,
         player_name: protagonist.name,
         starting_location: protagonist.location,
+        player_gender: protagonist.gender || 'Unspecified',
+        player_appearance: protagonist.appearance || '',
+        player_description: protagonist.description || '',
         stats: stats.reduce((acc, s) => ({ ...acc, [s.name]: s.value }), {}),
         inventory: inventory,
         npcs: npcs,
@@ -250,14 +275,35 @@ export default function CampaignCreator({ campaignId, onComplete }) {
 
         <section className="bg-fantasy-panel/40 border border-slate-700/50 rounded-xl p-6 shadow-md backdrop-blur">
            <h2 className="text-xl font-serif text-amber-500 mb-4 border-b border-slate-700/50 pb-2">1. The Protagonist</h2>
-           <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-6">
-              <div>
+           <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-4">
+              <div className="md:col-span-2">
                  <label className="block text-xs uppercase tracking-widest text-slate-400 mb-1">Name</label>
                  <input type="text" value={protagonist.name} onChange={e=>setProtagonist({...protagonist, name: e.target.value})} className="w-full bg-fantasy-dark border border-slate-600 rounded px-3 py-2 focus:border-fantasy-accent focus:outline-none text-sm" />
               </div>
               <div>
+                 <label className="block text-xs uppercase tracking-widest text-slate-400 mb-1">Gender</label>
+                 <select value={protagonist.gender} onChange={e=>setProtagonist({...protagonist, gender: e.target.value})} className="w-full bg-fantasy-dark border border-slate-600 rounded px-3 py-2 focus:border-fantasy-accent focus:outline-none text-sm">
+                    <option value="Unspecified">Unspecified</option>
+                    <option value="M">Male</option>
+                    <option value="F">Female</option>
+                    <option value="NB">Non-binary</option>
+                 </select>
+              </div>
+           </div>
+           <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-4">
+              <div>
                  <label className="block text-xs uppercase tracking-widest text-slate-400 mb-1">Starting Location</label>
                  <input type="text" value={protagonist.location} onChange={e=>setProtagonist({...protagonist, location: e.target.value})} className="w-full bg-fantasy-dark border border-slate-600 rounded px-3 py-2 focus:border-fantasy-accent focus:outline-none text-sm" />
+              </div>
+           </div>
+           <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-6">
+              <div>
+                 <label className="block text-xs uppercase tracking-widest text-slate-400 mb-1">Appearance</label>
+                 <textarea value={protagonist.appearance} onChange={e=>setProtagonist({...protagonist, appearance: e.target.value})} placeholder="Visible traits, build, clothing, distinguishing marks..." className="w-full bg-fantasy-dark border border-slate-600 rounded px-3 py-2 font-serif focus:border-fantasy-accent focus:outline-none text-sm min-h-[80px]" />
+              </div>
+              <div>
+                 <label className="block text-xs uppercase tracking-widest text-slate-400 mb-1">Details (Personality / Backstory)</label>
+                 <textarea value={protagonist.description} onChange={e=>setProtagonist({...protagonist, description: e.target.value})} placeholder="Disposition, motivations, history the GM should remember..." className="w-full bg-fantasy-dark border border-slate-600 rounded px-3 py-2 font-serif focus:border-fantasy-accent focus:outline-none text-sm min-h-[80px]" />
               </div>
            </div>
 
@@ -303,41 +349,72 @@ export default function CampaignCreator({ campaignId, onComplete }) {
 
            <div className="flex flex-col gap-4 mb-6">
              {npcs.map((n, idx) => (
-                <div key={idx} className="bg-fantasy-dark/60 border border-slate-600 rounded p-4 flex justify-between items-center group shadow-sm">
-                   <div>
-                      <h4 className="font-serif text-amber-400 text-lg">{n.name} <span className="text-sm font-sans text-slate-400 ml-2">Disposition: {n.disposition}</span></h4>
-                      {n.secrets_known && n.secrets_known.length > 0 && <p className="text-xs text-slate-300 italic mt-1">Secret: {n.secrets_known[0]}</p>}
+                <div key={idx} className="bg-fantasy-dark/60 border border-slate-600 rounded p-4 group shadow-sm">
+                   <div className="flex justify-between items-start gap-4">
+                      <div className="flex-1">
+                         <h4 className="font-serif text-amber-400 text-lg">
+                           {n.name}
+                           <span className="text-sm font-sans text-slate-400 ml-2">Disposition: {n.disposition}</span>
+                           {n.gender && n.gender !== 'Unspecified' && <span className="text-sm font-sans text-slate-400 ml-2">· {n.gender}</span>}
+                         </h4>
+                         {n.appearance && <p className="text-xs text-slate-300 mt-1"><span className="text-slate-500 uppercase tracking-wider mr-1">Appearance:</span>{n.appearance}</p>}
+                         {n.description && <p className="text-xs text-slate-300 mt-1"><span className="text-slate-500 uppercase tracking-wider mr-1">Details:</span>{n.description}</p>}
+                         {n.secrets_known && n.secrets_known.length > 0 && <p className="text-xs text-slate-300 italic mt-1">Secret: {n.secrets_known[0]}</p>}
+                      </div>
+                      <button onClick={() => removeNpc(idx)} className="text-red-400 hover:text-red-300 opacity-0 group-hover:opacity-100 transition text-sm">Remove</button>
                    </div>
-                   <button onClick={() => removeNpc(idx)} className="text-red-400 hover:text-red-300 opacity-0 group-hover:opacity-100 transition text-sm">Remove</button>
                 </div>
              ))}
            </div>
 
-           <div className="flex flex-col md:flex-row gap-3 items-end bg-fantasy-dark/30 p-4 rounded border border-dashed border-slate-600">
-              <div className="flex-1">
-                 <label className="block text-xs uppercase tracking-widest text-slate-400 mb-1">NPC Name</label>
-                 <input type="text" placeholder="e.g. Elena" value={newNpc.name} onChange={e=>setNewNpc({...newNpc, name: e.target.value})} className="w-full bg-fantasy-dark border border-slate-600 rounded px-3 py-2 focus:border-fantasy-accent focus:outline-none text-sm" />
+           <div className="bg-fantasy-dark/30 p-4 rounded border border-dashed border-slate-600 flex flex-col gap-3">
+              <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+                 <div>
+                    <label className="block text-xs uppercase tracking-widest text-slate-400 mb-1">NPC Name</label>
+                    <input type="text" placeholder="e.g. Elena" value={newNpc.name} onChange={e=>setNewNpc({...newNpc, name: e.target.value})} className="w-full bg-fantasy-dark border border-slate-600 rounded px-3 py-2 focus:border-fantasy-accent focus:outline-none text-sm" />
+                 </div>
+                 <div>
+                    <label className="block text-xs uppercase tracking-widest text-slate-400 mb-1">Disposition</label>
+                    <select value={newNpc.disposition} onChange={e=>setNewNpc({...newNpc, disposition: e.target.value})} className="w-full bg-fantasy-dark border border-slate-600 rounded px-3 py-2 focus:border-fantasy-accent focus:outline-none text-sm">
+                       <option>Friendly</option>
+                       <option>Neutral</option>
+                       <option>Suspicious</option>
+                       <option>Hostile</option>
+                    </select>
+                 </div>
+                 <div>
+                    <label className="block text-xs uppercase tracking-widest text-slate-400 mb-1">Gender</label>
+                    <select value={newNpc.gender} onChange={e=>setNewNpc({...newNpc, gender: e.target.value})} className="w-full bg-fantasy-dark border border-slate-600 rounded px-3 py-2 focus:border-fantasy-accent focus:outline-none text-sm">
+                       <option value="Unspecified">Unspecified</option>
+                       <option value="M">Male</option>
+                       <option value="F">Female</option>
+                       <option value="NB">Non-binary</option>
+                    </select>
+                 </div>
               </div>
-              <div className="w-32">
-                 <label className="block text-xs uppercase tracking-widest text-slate-400 mb-1">Disposition</label>
-                 <select value={newNpc.disposition} onChange={e=>setNewNpc({...newNpc, disposition: e.target.value})} className="w-full bg-fantasy-dark border border-slate-600 rounded px-3 py-2 focus:border-fantasy-accent focus:outline-none text-sm">
-                    <option>Friendly</option>
-                    <option>Neutral</option>
-                    <option>Suspicious</option>
-                    <option>Hostile</option>
-                 </select>
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                 <div>
+                    <label className="block text-xs uppercase tracking-widest text-slate-400 mb-1">Appearance</label>
+                    <textarea placeholder="Visible traits, clothing, distinguishing marks..." value={newNpc.appearance} onChange={e=>setNewNpc({...newNpc, appearance: e.target.value})} className="w-full bg-fantasy-dark border border-slate-600 rounded px-3 py-2 focus:border-fantasy-accent focus:outline-none text-sm min-h-[60px]" />
+                 </div>
+                 <div>
+                    <label className="block text-xs uppercase tracking-widest text-slate-400 mb-1">Details</label>
+                    <textarea placeholder="Personality, role, history..." value={newNpc.description} onChange={e=>setNewNpc({...newNpc, description: e.target.value})} className="w-full bg-fantasy-dark border border-slate-600 rounded px-3 py-2 focus:border-fantasy-accent focus:outline-none text-sm min-h-[60px]" />
+                 </div>
               </div>
-              <div className="flex-1">
-                 <label className="block text-xs uppercase tracking-widest text-slate-400 mb-1">Secret (Optional)</label>
-                 <input type="text" placeholder="e.g. She holds a grudge." value={newNpc.secret} onChange={e=>setNewNpc({...newNpc, secret: e.target.value})} className="w-full bg-fantasy-dark border border-slate-600 rounded px-3 py-2 focus:border-fantasy-accent focus:outline-none text-sm" />
+              <div className="flex flex-col md:flex-row gap-3 items-end">
+                 <div className="flex-1 w-full">
+                    <label className="block text-xs uppercase tracking-widest text-slate-400 mb-1">Secret (Optional)</label>
+                    <input type="text" placeholder="e.g. She holds a grudge." value={newNpc.secret} onChange={e=>setNewNpc({...newNpc, secret: e.target.value})} className="w-full bg-fantasy-dark border border-slate-600 rounded px-3 py-2 focus:border-fantasy-accent focus:outline-none text-sm" />
+                 </div>
+                 <button
+                     onClick={addNpc}
+                     disabled={!newNpc.name.trim()}
+                     className="bg-slate-700 hover:bg-slate-600 text-white px-4 py-2 rounded font-semibold transition disabled:opacity-50 text-sm h-[38px] w-full md:w-auto"
+                 >
+                    Add Character
+                 </button>
               </div>
-              <button
-                  onClick={addNpc}
-                  disabled={!newNpc.name.trim()}
-                  className="bg-slate-700 hover:bg-slate-600 text-white px-4 py-2 rounded font-semibold transition disabled:opacity-50 text-sm h-[38px]"
-              >
-                 Add Character
-              </button>
            </div>
         </section>
 

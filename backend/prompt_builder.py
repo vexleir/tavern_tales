@@ -38,12 +38,17 @@ def _render_protagonist(state: CampaignState) -> str:
     p = state.player
     stats = ", ".join(f"{k}: {v}" for k, v in p.stats.items()) or "(none)"
     inv = ", ".join(p.inventory) if p.inventory else "(empty)"
-    return (
-        f"Name: {p.name}\n"
-        f"Location: {p.location}\n"
-        f"Stats: {stats}\n"
-        f"Inventory: {inv}"
-    )
+    lines = [f"Name: {p.name}"]
+    if p.gender and p.gender != "Unspecified":
+        lines.append(f"Gender: {p.gender}")
+    lines.append(f"Location: {p.location}")
+    if p.appearance.strip():
+        lines.append(f"Appearance: {p.appearance.strip()}")
+    if p.description.strip():
+        lines.append(f"Details: {p.description.strip()}")
+    lines.append(f"Stats: {stats}")
+    lines.append(f"Inventory: {inv}")
+    return "\n".join(lines)
 
 
 def _render_cast(state: CampaignState) -> str:
@@ -51,11 +56,18 @@ def _render_cast(state: CampaignState) -> str:
         return "(no named NPCs yet)"
     lines: list[str] = []
     for npc in state.npcs:
-        line = f"- {npc.name} ({npc.disposition.value})"
+        header = f"- {npc.name} ({npc.disposition.value}"
+        if npc.gender and npc.gender != "Unspecified":
+            header += f", {npc.gender}"
+        header += ")"
+        lines.append(header)
+        if npc.appearance.strip():
+            lines.append(f"    Appearance: {npc.appearance.strip()}")
+        if npc.description.strip():
+            lines.append(f"    Details: {npc.description.strip()}")
         if npc.secrets_known:
             secrets = "; ".join(npc.secrets_known)
-            line += f"\n    {GM_ONLY_MARKER} Secrets: {secrets}"
-        lines.append(line)
+            lines.append(f"    {GM_ONLY_MARKER} Secrets: {secrets}")
     return "\n".join(lines)
 
 

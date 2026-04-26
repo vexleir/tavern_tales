@@ -28,11 +28,21 @@ def _rich_state() -> CampaignState:
         player=Player(
             name="Matt",
             location="Willowdale Market",
+            gender="M",
+            appearance="Tall, sun-bleached hair, scar across the right brow.",
+            description="Cynical mercenary with a soft spot for orphans.",
             stats={"Health": 100, "Gold": 50, "Sanity": 80},
             inventory=["Rusty Sword", "Torch"],
         ),
         npcs=[
-            NPC(name="Elara", disposition=Disposition.NEUTRAL, secrets_known=["knows the tome location"]),
+            NPC(
+                name="Elara",
+                disposition=Disposition.NEUTRAL,
+                gender="F",
+                appearance="Cloaked in deep green; silver braid.",
+                description="Local apothecary who sees more than she says.",
+                secrets_known=["knows the tome location"],
+            ),
             NPC(name="Lord Ravenwood", disposition=Disposition.HOSTILE),
         ],
         lorebook={"Magic": "Magic is illegal and heavily punished.", "Crown": "The crown is missing."},
@@ -65,12 +75,18 @@ def test_system_prompt_contains_every_required_block():
     assert "Willowdale Market" in sp
     assert "Health: 100" in sp
     assert "Rusty Sword" in sp
+    assert "Gender: M" in sp
+    assert "sun-bleached hair" in sp  # appearance
+    assert "Cynical mercenary" in sp  # description
     # Cast — including GM-only secrets tag
     assert "CAST" in sp
     assert "Elara" in sp
     assert "Lord Ravenwood" in sp
     assert "tome location" in sp
     assert "GM-only knowledge" in sp
+    # Cast appearance + details survive into the prompt
+    assert "silver braid" in sp
+    assert "apothecary" in sp
     # Lorebook — ALL entries, not keyword-filtered
     assert "LOREBOOK" in sp
     assert "[Magic]" in sp

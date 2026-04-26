@@ -16,9 +16,19 @@ def test_campaign_state_defaults():
     assert s.schema_version == SCHEMA_VERSION
     assert s.campaign_id == "t1"
     assert s.player.name == "Unknown"
+    assert s.player.gender == "Unspecified"
+    assert s.player.appearance == ""
+    assert s.player.description == ""
     assert s.models.gm == "llama3"
     assert s.summaries.short == ""
     assert s.messages == []
+
+
+def test_npc_identity_defaults():
+    npc = NPC(name="X")
+    assert npc.gender == "Unspecified"
+    assert npc.appearance == ""
+    assert npc.description == ""
 
 
 def test_message_auto_id():

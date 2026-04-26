@@ -300,6 +300,7 @@ function AppInner() {
 
   const updateStat = (name, val) => pushStatePatch({ stats: { [name]: val } }, s => { s.player.stats[name] = val; }, `Edit ${name}`);
   const updateLocation = (loc) => pushStatePatch({ player: { location: loc } }, s => { s.player.location = loc; }, 'Edit location');
+  const updatePlayerField = (field, val) => pushStatePatch({ player: { [field]: val } }, s => { s.player[field] = val; }, `Edit ${field}`);
   const addInventory = (item) => {
     if (!item.trim()) return;
     const inventory = [...(campaignState.player?.inventory || []), item.trim()];
@@ -502,6 +503,41 @@ function AppInner() {
                     <span className="text-slate-200 italic">{campaignState.player?.location || 'Unknown'}</span>
                   )}
                 </div>
+                {(directorMode || (campaignState.player?.gender && campaignState.player.gender !== 'Unspecified')) && (
+                  <div className="mt-2 pt-2 border-t border-slate-700/50">
+                    <span className="text-slate-400 block text-xs mb-1">Gender:</span>
+                    {directorMode ? (
+                      <select className="w-full bg-slate-800 text-slate-200 p-1 border border-slate-600 rounded text-xs" value={campaignState.player?.gender || 'Unspecified'} onChange={(e) => updatePlayerField('gender', e.target.value)}>
+                        <option value="Unspecified">Unspecified</option>
+                        <option value="M">Male</option>
+                        <option value="F">Female</option>
+                        <option value="NB">Non-binary</option>
+                      </select>
+                    ) : (
+                      <span className="text-slate-200">{campaignState.player?.gender}</span>
+                    )}
+                  </div>
+                )}
+                {(directorMode || campaignState.player?.appearance) && (
+                  <div className="mt-2 pt-2 border-t border-slate-700/50">
+                    <span className="text-slate-400 block text-xs mb-1">Appearance:</span>
+                    {directorMode ? (
+                      <textarea className="w-full bg-slate-800 text-slate-200 p-1 border border-slate-600 rounded text-xs" rows={2} value={campaignState.player?.appearance || ''} onChange={(e) => updatePlayerField('appearance', e.target.value)} />
+                    ) : (
+                      <span className="text-slate-200 italic">{campaignState.player?.appearance}</span>
+                    )}
+                  </div>
+                )}
+                {(directorMode || campaignState.player?.description) && (
+                  <div className="mt-2 pt-2 border-t border-slate-700/50">
+                    <span className="text-slate-400 block text-xs mb-1">Details:</span>
+                    {directorMode ? (
+                      <textarea className="w-full bg-slate-800 text-slate-200 p-1 border border-slate-600 rounded text-xs" rows={2} value={campaignState.player?.description || ''} onChange={(e) => updatePlayerField('description', e.target.value)} />
+                    ) : (
+                      <span className="text-slate-200 italic">{campaignState.player?.description}</span>
+                    )}
+                  </div>
+                )}
                 {(campaignState.player?.inventory?.length > 0 || directorMode) && (
                   <div className="mt-2 pt-2 border-t border-slate-700/50">
                     <span className="text-slate-400 block text-xs mb-1">Inventory:</span>
@@ -532,15 +568,36 @@ function AppInner() {
                       {directorMode ? (
                         <>
                           <input className="bg-slate-800 border border-slate-600 rounded px-2 py-1 text-sm w-full mb-1 text-fantasy-accent font-bold" value={npc.name} onChange={e => updateNpc(idx, { name: e.target.value })} />
-                          <select className="bg-slate-800 border border-slate-600 rounded px-2 py-1 text-xs text-slate-300 w-full mb-1" value={npc.disposition} onChange={e => updateNpc(idx, { disposition: e.target.value })}>
-                            <option>Friendly</option><option>Neutral</option><option>Suspicious</option><option>Hostile</option>
-                          </select>
+                          <div className="grid grid-cols-2 gap-1 mb-1">
+                            <select className="bg-slate-800 border border-slate-600 rounded px-2 py-1 text-xs text-slate-300" value={npc.disposition} onChange={e => updateNpc(idx, { disposition: e.target.value })}>
+                              <option>Friendly</option><option>Neutral</option><option>Suspicious</option><option>Hostile</option>
+                            </select>
+                            <select className="bg-slate-800 border border-slate-600 rounded px-2 py-1 text-xs text-slate-300" value={npc.gender || 'Unspecified'} onChange={e => updateNpc(idx, { gender: e.target.value })}>
+                              <option value="Unspecified">Unspecified</option>
+                              <option value="M">Male</option>
+                              <option value="F">Female</option>
+                              <option value="NB">Non-binary</option>
+                            </select>
+                          </div>
+                          <textarea placeholder="Appearance" className="w-full bg-slate-800 text-slate-200 border border-slate-600 rounded px-2 py-1 text-xs mb-1" rows={2} value={npc.appearance || ''} onChange={e => updateNpc(idx, { appearance: e.target.value })} />
+                          <textarea placeholder="Details" className="w-full bg-slate-800 text-slate-200 border border-slate-600 rounded px-2 py-1 text-xs mb-1" rows={2} value={npc.description || ''} onChange={e => updateNpc(idx, { description: e.target.value })} />
                           <button className="text-xs text-red-400 hover:text-red-300" onClick={() => removeNpc(idx)}>Remove NPC</button>
                         </>
                       ) : (
                         <>
                           <div className="font-serif text-fantasy-accent font-bold text-base border-b border-slate-700 pb-1 mb-2">{npc.name}</div>
-                          <div className="text-xs text-slate-400 mb-1">Disposition: <span className="ml-1 text-slate-200">{npc.disposition}</span></div>
+                          <div className="text-xs text-slate-400 mb-1">
+                            Disposition: <span className="ml-1 text-slate-200">{npc.disposition}</span>
+                            {npc.gender && npc.gender !== 'Unspecified' && (
+                              <span className="ml-2">· <span className="text-slate-200">{npc.gender}</span></span>
+                            )}
+                          </div>
+                          {npc.appearance && (
+                            <div className="text-xs text-slate-400 mt-1"><span className="text-slate-500 uppercase tracking-wider">Appearance:</span> <span className="text-slate-200 italic">{npc.appearance}</span></div>
+                          )}
+                          {npc.description && (
+                            <div className="text-xs text-slate-400 mt-1"><span className="text-slate-500 uppercase tracking-wider">Details:</span> <span className="text-slate-200 italic">{npc.description}</span></div>
+                          )}
                         </>
                       )}
                       {npc.secrets_known && npc.secrets_known.length > 0 && (

@@ -42,6 +42,9 @@ class Role(str, Enum):
 class Player(BaseModel):
     name: str = "Unknown"
     location: str = "The Ember & Ash Tavern"
+    gender: str = "Unspecified"  # M / F / NB / Unspecified (free-form to allow custom values)
+    appearance: str = ""  # physical description — what others see
+    description: str = ""  # personality, backstory, notable traits
     stats: dict[str, int] = Field(default_factory=dict)
     inventory: list[str] = Field(default_factory=list)
 
@@ -49,6 +52,9 @@ class Player(BaseModel):
 class NPC(BaseModel):
     name: str
     disposition: Disposition = Disposition.NEUTRAL
+    gender: str = "Unspecified"
+    appearance: str = ""
+    description: str = ""
     secrets_known: list[str] = Field(default_factory=list)
 
 

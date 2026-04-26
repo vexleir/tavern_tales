@@ -123,6 +123,9 @@ class InitCampaignRequest(BaseModel):
     campaign_id: str
     player_name: str
     starting_location: str
+    player_gender: str = "Unspecified"
+    player_appearance: str = ""
+    player_description: str = ""
     stats: dict[str, int]
     inventory: list[str] = Field(default_factory=list)
     npcs: list[dict[str, Any]] = Field(default_factory=list)
@@ -211,6 +214,9 @@ async def init_campaign(req: InitCampaignRequest):
         player=Player(
             name=req.player_name,
             location=req.starting_location,
+            gender=req.player_gender or "Unspecified",
+            appearance=req.player_appearance,
+            description=req.player_description,
             stats=dict(req.stats),
             inventory=list(req.inventory),
         ),
@@ -284,6 +290,12 @@ async def patch_state(campaign_id: str, req: DirectorPatchRequest):
                 state.player.name = str(req.player["name"])
             if "location" in req.player:
                 state.player.location = str(req.player["location"])
+            if "gender" in req.player:
+                state.player.gender = str(req.player["gender"]) or "Unspecified"
+            if "appearance" in req.player:
+                state.player.appearance = str(req.player["appearance"])
+            if "description" in req.player:
+                state.player.description = str(req.player["description"])
 
         if req.stats is not None:
             state.player.stats.update({str(k): int(v) for k, v in req.stats.items()})
@@ -767,18 +779,29 @@ Return ONLY a JSON object matching this schema:
     "world_description": "<string: 2-3 paragraphs — lore, atmosphere, factions>",
     "starting_scene": "<string: 1-2 paragraphs — exactly where the protagonist stands and what is happening right now>",
     "player_starting_location": "<string>",
+    "player_gender": "M|F|NB",
+    "player_appearance": "<string: 1-2 sentences — visible physical traits, clothing, distinguishing marks>",
+    "player_description": "<string: 1-2 sentences — personality, background, motivation>",
     "story_summary": "<string: 3-4 sentences — background history + player's current situation>",
     "lorebook": [ {{"keyword": "<string>", "rule": "<string>"}} ],
-    "npcs": [ {{"name": "<string>", "disposition": "Friendly|Neutral|Suspicious|Hostile", "secrets_known": ["<string>"]}} ]
+    "npcs": [ {{
+        "name": "<string>",
+        "disposition": "Friendly|Neutral|Suspicious|Hostile",
+        "gender": "M|F|NB",
+        "appearance": "<string: 1 sentence — visible physical traits and clothing>",
+        "description": "<string: 1 sentence — personality and role in the world>",
+        "secrets_known": ["<string>"]
+    }} ]
 }}
-Ensure exactly 3 NPCs and at least 3 lorebook entries.
+Ensure exactly 3 NPCs and at least 3 lorebook entries. Every player and NPC field must be filled (do not leave any blank).
 
 User Concept: {req.prompt}"""
 
     result = await complete_json(
         messages=[{"role": "user", "content": sys_prompt}],
         model=model,
-        timeout=120.0,
+        timeout=180.0,
+        num_predict=2048,
     )
     if result is None:
         raise HTTPException(502, f"World generation failed (model {model} unavailable or returned no JSON)")
