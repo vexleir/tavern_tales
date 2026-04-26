@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import CampaignCreator from './CampaignCreator';
 import BannerProvider from './components/BannerProvider';
 import ModalProvider from './components/ModalProvider';
@@ -30,6 +30,27 @@ function AppInner() {
 
   const modal = useModal();
   const banner = useBanner();
+
+  // Scroll the chat to the latest paragraph the first time a campaign's messages
+  // populate — avoids landing on the prologue when reopening a long story.
+  const scrollAnchorRef = useRef(null);
+  const initialScrolledCampaignRef = useRef(null);
+
+  useEffect(() => {
+    if (appMode !== 'play' || messages.length === 0) return;
+    if (initialScrolledCampaignRef.current === activeCampaignId) return;
+    initialScrolledCampaignRef.current = activeCampaignId;
+    // Wait one frame so the layout is committed before scrolling.
+    requestAnimationFrame(() => {
+      scrollAnchorRef.current?.scrollIntoView({ block: 'end' });
+    });
+  }, [appMode, activeCampaignId, messages.length]);
+
+  useEffect(() => {
+    if (appMode !== 'play') {
+      initialScrolledCampaignRef.current = null;
+    }
+  }, [appMode]);
 
   // -------------------------------------------------------- data access
 
@@ -791,6 +812,7 @@ function AppInner() {
               )}
             </div>
           )}
+          <div ref={scrollAnchorRef} aria-hidden="true" />
         </div>
 
         <div className="p-4 bg-fantasy-panel border-t border-slate-700/50 shadow-[0_-4px_6px_-1px_rgba(0,0,0,0.1)]">
