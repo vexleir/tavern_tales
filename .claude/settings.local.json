@@ -1,0 +1,33 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(git checkout *)",
+      "Bash(python -c \"import pydantic; print\\(pydantic.VERSION\\)\")",
+      "Bash(python -c \"from schema import CampaignState, SCHEMA_VERSION; s = CampaignState\\(campaign_id='test'\\); print\\('OK', SCHEMA_VERSION\\); print\\(s.model_dump\\(\\)['schema_version']\\)\")",
+      "Bash(python -c \"from tokenizer import count_tokens, lookup_context_window; print\\(count_tokens\\('Hello world, this is a test message.'\\)\\); print\\(lookup_context_window\\('llama3.1:8b-instruct'\\)\\); print\\(lookup_context_window\\('fluffy/l3-8b-stheno-v3.2:latest'\\)\\)\")",
+      "Bash(python -c ' *)",
+      "Bash(python -c \"import main; print\\('backend module loaded OK'\\)\")",
+      "Bash(python -c \"import main; print\\('backend OK'\\)\")",
+      "Bash(npx --no-install vite build)",
+      "Bash(python -c \"import main; print\\('OK'\\)\")",
+      "Bash(python -m pip install pytest pytest-asyncio syrupy)",
+      "Bash(python -m pytest tests/ -x -q)",
+      "Bash(curl -s --max-time 3 http://localhost:11434/api/tags)",
+      "Bash(curl -s http://localhost:11434/api/tags)",
+      "Bash(python -c \"import json,sys;d=json.load\\(sys.stdin\\);print\\('\\\\n'.join\\(m['name'] for m in d['models']\\)\\)\")",
+      "Bash(python -m uvicorn main:app --port 8765 --log-level warning)",
+      "Bash(curl -s http://localhost:8765/)",
+      "Bash(curl -s http://localhost:8765/api/campaigns)",
+      "Bash(curl -s -X POST http://localhost:8765/api/campaign/init -H \"Content-Type: application/json\" -d '{\"campaign_id\":\"smoke_test\",\"player_name\":\"Tester\",\"starting_location\":\"Test Room\",\"stats\":{\"Health\":100,\"Gold\":50},\"inventory\":[\"Notebook\"],\"npcs\":[{\"name\":\"QA Bot\",\"disposition\":\"Neutral\",\"secrets_known\":[]}],\"lorebook\":{\"Test\":\"This is a smoke test.\"},\"world_description\":\"A test realm of CI pipelines.\",\"starting_scene\":\"You stand before a green build light.\",\"gm_model\":\"mistral-nemo:latest\",\"utility_model\":\"mistral-nemo:latest\",\"nsfw_world_gen\":false}')",
+      "Bash(curl -s http://localhost:8765/api/state/smoke_test)",
+      "Bash(python -m json.tool)",
+      "Bash(curl -sN -X POST http://localhost:8765/api/campaign/smoke_test/kickoff --max-time 90)",
+      "Bash(curl -sN -X POST http://localhost:8765/api/chat/stream -H \"Content-Type: application/json\" -d '{\"campaign_id\":\"smoke_test\",\"user_message\":\"I open my Notebook and write down what I see.\"}' --max-time 60)",
+      "Bash(curl -s http://localhost:8765/api/campaign/smoke_test/last_prompt)",
+      "Bash(curl -s -X DELETE http://localhost:8765/api/campaigns/smoke_test)",
+      "Bash(kill %1)",
+      "Bash(awk '{print $2}')",
+      "Bash(xargs -r kill)"
+    ]
+  }
+}
