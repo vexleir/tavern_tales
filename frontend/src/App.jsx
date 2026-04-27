@@ -6,7 +6,7 @@ import ModalProvider from './components/ModalProvider';
 import useBanner from './hooks/useBanner';
 import useModal from './hooks/useModal';
 import useNdjsonStream from './hooks/useNdjsonStream';
-import { apiFetch } from './lib/api';
+import { apiFetch, describeApiError } from './lib/api';
 
 const createCampaignId = () => `campaign_${Date.now()}`;
 
@@ -65,7 +65,7 @@ function AppInner() {
       setMessages(visible);
       return data;
     } catch (e) {
-      banner.error(`Could not load campaign: ${e.message}`);
+      banner.error(`Could not load campaign: ${describeApiError(e)}`);
       return null;
     }
   }, [banner]);
@@ -80,7 +80,7 @@ function AppInner() {
       apiFetch('/api/campaigns')
         .then(r => r.json())
         .then(setSavedCampaigns)
-        .catch(e => banner.error(`Could not list campaigns: ${e.message}`));
+        .catch(e => banner.error(`Could not list campaigns: ${describeApiError(e)}`));
     }
   }, [appMode, banner]);
 
@@ -224,7 +224,7 @@ function AppInner() {
       const res = await apiFetch('/api/campaigns');
       setSavedCampaigns(await res.json());
     } catch (err) {
-      banner.error(`Delete failed: ${err.message}`);
+      banner.error(`Delete failed: ${describeApiError(err)}`);
     }
   };
 
@@ -273,7 +273,7 @@ function AppInner() {
         }
       }
     } catch (e) {
-      banner.error(`Fork failed: ${e.message}`);
+      banner.error(`Fork failed: ${describeApiError(e)}`);
     }
   };
 
@@ -307,7 +307,7 @@ function AppInner() {
       const data = await res.json();
       setCampaignState(data.state);
     } catch (e) {
-      banner.error(`Edit failed: ${e.message}`);
+      banner.error(`Edit failed: ${describeApiError(e)}`);
       setCampaignState(before);
     }
   };
@@ -341,7 +341,7 @@ function AppInner() {
         await refreshState(activeCampaignId);
       }
     } catch (e) {
-      banner.error(`Undo failed: ${e.message}`);
+      banner.error(`Undo failed: ${describeApiError(e)}`);
     }
   };
 
@@ -413,7 +413,7 @@ function AppInner() {
       a.click();
       URL.revokeObjectURL(url);
     } catch (e) {
-      banner.error(`Export failed: ${e.message}`);
+      banner.error(`Export failed: ${describeApiError(e)}`);
     }
   };
 
@@ -429,7 +429,7 @@ function AppInner() {
       a.click();
       URL.revokeObjectURL(url);
     } catch (e) {
-      banner.error(`Debug export failed: ${e.message}`);
+      banner.error(`Debug export failed: ${describeApiError(e)}`);
     }
   };
 
@@ -448,7 +448,7 @@ function AppInner() {
       const list = await apiFetch('/api/campaigns');
       setSavedCampaigns(await list.json());
     } catch (e) {
-      banner.error(`Import failed: ${e.message}`);
+      banner.error(`Import failed: ${describeApiError(e)}`);
     }
   };
 
@@ -466,7 +466,7 @@ function AppInner() {
           banner.info('No prompt available yet — send a turn first.');
         }
       }
-    } catch (e) { banner.error(`Inspector failed: ${e.message}`); }
+    } catch (e) { banner.error(`Inspector failed: ${describeApiError(e)}`); }
   };
 
   // -------------------------------------------------------- render

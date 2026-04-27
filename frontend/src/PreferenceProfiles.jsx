@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from 'react';
-import { apiFetch, parseErrorResponse } from './lib/api';
+import { apiFetch, describeApiError, parseErrorResponse } from './lib/api';
 
 const fantasyInterestOptions = ['none', 'low', 'medium', 'high', 'favorite'];
 const realWorldOptions = ['hard_no', 'soft_no', 'discuss_only', 'maybe', 'yes'];
@@ -82,7 +82,7 @@ export default function PreferenceProfiles({ onBack }) {
       setProfiles(data);
       return data;
     } catch (e) {
-      setError(`Could not load profiles: ${e.message}`);
+      setError(`Could not load profiles: ${describeApiError(e)}`);
       return [];
     }
   }, []);
@@ -96,7 +96,7 @@ export default function PreferenceProfiles({ onBack }) {
       setFantasies(data);
       return data;
     } catch (e) {
-      setError(`Could not load fantasy drafts: ${e.message}`);
+      setError(`Could not load fantasy drafts: ${describeApiError(e)}`);
       return [];
     }
   }, []);
@@ -112,7 +112,7 @@ export default function PreferenceProfiles({ onBack }) {
       setActiveFantasy(null);
       await loadFantasies(profileId);
     } catch (e) {
-      setError(`Could not open profile: ${e.message}`);
+      setError(`Could not open profile: ${describeApiError(e)}`);
     } finally {
       setBusy(false);
     }
@@ -131,7 +131,7 @@ export default function PreferenceProfiles({ onBack }) {
         if (data.length > 0) openProfile(data[0].profileId);
       })
       .catch((e) => {
-        if (!cancelled) setError(`Could not load profiles: ${e.message}`);
+        if (!cancelled) setError(`Could not load profiles: ${describeApiError(e)}`);
       });
     return () => { cancelled = true; };
   }, [openProfile]);
@@ -151,7 +151,7 @@ export default function PreferenceProfiles({ onBack }) {
       await loadProfiles();
       await openProfile(created.profileId);
     } catch (e) {
-      setError(`Could not create profile: ${e.message}`);
+      setError(`Could not create profile: ${describeApiError(e)}`);
     } finally {
       setBusy(false);
     }
@@ -172,7 +172,7 @@ export default function PreferenceProfiles({ onBack }) {
       setProfile(saved);
       await loadProfiles();
     } catch (e) {
-      setError(`Could not save profile: ${e.message}`);
+      setError(`Could not save profile: ${describeApiError(e)}`);
     } finally {
       setBusy(false);
     }
@@ -258,7 +258,7 @@ export default function PreferenceProfiles({ onBack }) {
       setActiveFantasy(draft);
       await loadFantasies(profile.profileId);
     } catch (e) {
-      setError(`Could not create fantasy draft: ${e.message}`);
+      setError(`Could not create fantasy draft: ${describeApiError(e)}`);
     } finally {
       setBusy(false);
     }
@@ -273,7 +273,7 @@ export default function PreferenceProfiles({ onBack }) {
       setActiveFantasy(await res.json());
       setProtectDraft({ password: '', hint: '' });
     } catch (e) {
-      setError(`Could not open fantasy draft: ${e.message}`);
+      setError(`Could not open fantasy draft: ${describeApiError(e)}`);
     } finally {
       setBusy(false);
     }
@@ -294,7 +294,7 @@ export default function PreferenceProfiles({ onBack }) {
       setProtectDraft({ password: '', hint: '' });
       await loadFantasies(activeFantasy.ownerProfileId);
     } catch (e) {
-      setError(`Could not protect draft: ${e.message}`);
+      setError(`Could not protect draft: ${describeApiError(e)}`);
     } finally {
       setBusy(false);
     }
@@ -308,7 +308,7 @@ export default function PreferenceProfiles({ onBack }) {
       const payload = await res.json();
       downloadJson(`${profile.profileId}.${includePrivateExport ? 'private' : 'redacted'}.preferences.json`, payload);
     } catch (e) {
-      setError(`Could not export profile: ${e.message}`);
+      setError(`Could not export profile: ${describeApiError(e)}`);
     }
   };
 
@@ -328,7 +328,7 @@ export default function PreferenceProfiles({ onBack }) {
       await loadProfiles();
       await openProfile(imported.profileId);
     } catch (e) {
-      setError(`Could not import profile: ${e.message}`);
+      setError(`Could not import profile: ${describeApiError(e)}`);
     } finally {
       setBusy(false);
     }

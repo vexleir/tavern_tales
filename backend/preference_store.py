@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import os
 import re
 import time
@@ -13,7 +14,7 @@ from typing import Any
 
 from pydantic import ValidationError
 
-from preference_defaults import default_categories
+from preference_defaults import default_categories, merge_default_categories
 from preference_schema import (
     FantasySummary,
     GeneratedFantasy,
@@ -24,6 +25,8 @@ from preference_schema import (
     pref_id,
 )
 from secure_storage import decrypt_json, encrypt_json, password_decrypt_text, password_encrypt_text
+
+log = logging.getLogger(__name__)
 
 
 _BACKEND_DIR = Path(__file__).resolve().parent
@@ -104,7 +107,20 @@ def _atomic_write(path: Path, payload: dict[str, Any]) -> None:
             os.fsync(f.fileno())
         except OSError:
             pass
-    os.replace(tmp, path)
+    try:
+        os.replace(tmp, path)
+    except PermissionError:
+        # Some Windows sandbox/ACL combinations allow file creation and writes
+        # but deny rename/delete in newly-created sensitive-data directories.
+        # Keep the payload encrypted and fall back to a direct write so profile
+        # creation still works for local users.
+        with open(path, "w", encoding="utf-8") as f:
+            f.write(data)
+            f.flush()
+            try:
+                os.fsync(f.fileno())
+            except OSError:
+                pass
 
 
 def new_profile(display_name: str, user_id: str = "local_default") -> UserPreferenceProfile:
@@ -146,7 +162,7 @@ async def load_profile(profile_id: str) -> UserPreferenceProfile | None:
     try:
         raw = json.loads(path.read_text(encoding="utf-8"))
         data = decrypt_json(raw)
-        return UserPreferenceProfile.model_validate(data)
+        return merge_default_categories(UserPreferenceProfile.model_validate(data))
     except (json.JSONDecodeError, ValidationError, ValueError) as e:
         corrupt = path.with_suffix(f".corrupt-{int(time.time())}.bak")
         try:
@@ -162,7 +178,17 @@ async def list_profiles(include_archived: bool = False) -> list[PreferenceProfil
     for entry in sorted(PREFERENCES_DIR.glob("*.json")):
         if entry.name.endswith(".tmp"):
             continue
-        profile = await load_profile(entry.stem)
+        try:
+            raw = json.loads(entry.read_text(encoding="utf-8"))
+        except json.JSONDecodeError:
+            continue
+        if not isinstance(raw, dict) or raw.get("encrypted") is not True:
+            continue
+        try:
+            profile = await load_profile(entry.stem)
+        except Exception as e:  # noqa: BLE001
+            log.warning("Skipping unreadable preference profile %s: %s", entry.name, e)
+            continue
         if profile is None:
             continue
         if profile.status == ProfileStatus.ARCHIVED and not include_archived:

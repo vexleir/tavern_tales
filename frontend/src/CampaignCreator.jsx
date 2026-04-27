@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { apiFetch, parseErrorResponse } from './lib/api';
+import { apiFetch, describeApiError, parseErrorResponse } from './lib/api';
 
 export default function CampaignCreator({ campaignId, onComplete }) {
   const [protagonist, setProtagonist] = useState({
@@ -118,7 +118,7 @@ export default function CampaignCreator({ campaignId, onComplete }) {
           setSubmitError(`World generation failed (${res.status}): ${msg}`);
        }
     } catch(e) {
-       setSubmitError(`World generation failed: ${e.message}`);
+       setSubmitError(`World generation failed: ${describeApiError(e)}`);
     } finally {
        setIsGenerating(false);
     }
@@ -186,7 +186,7 @@ export default function CampaignCreator({ campaignId, onComplete }) {
         setSubmitError(`Failed to start campaign: ${err.detail || res.statusText}`);
       }
     } catch (e) {
-      setSubmitError(`Failed to start campaign: ${e.message}. Is the backend running?`);
+      setSubmitError(`Failed to start campaign: ${describeApiError(e)}`);
     }
   };
 

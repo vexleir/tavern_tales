@@ -74,6 +74,48 @@ def test_redaction_omits_private_notes_and_reality_bridge(temp_preference_dirs):
     assert redacted["realityBridge"]["conditions"] == []
 
 
+def test_default_profile_has_bdsm_style_checklist_domains(temp_preference_dirs):
+    import preference_store
+
+    profile = preference_store.new_profile("Jordan")
+    categories = {category.id: category for category in profile.categories}
+
+    for required in {
+        "power_dynamics",
+        "control_themes",
+        "fantasy_elements",
+        "social_dynamics",
+        "emotional_tone",
+        "interaction_style",
+    }:
+        assert required in categories
+
+    assert "sensation_play" in categories
+    assert "symbols_and_gear" in categories
+    assert len(categories["power_dynamics"].items) >= 8
+    all_item_ids = {item.id for category in profile.categories for item in category.items}
+    assert "power_submission" in all_item_ids
+    assert "control_restraint_light" in all_item_ids
+    assert "sensation_impact_symbolic" in all_item_ids
+    assert "style_safeword_visible" in all_item_ids
+
+
+@pytest.mark.asyncio
+async def test_existing_profiles_receive_new_default_items(temp_preference_dirs):
+    import preference_store
+
+    profile = preference_store.new_profile("Legacy")
+    profile.categories = profile.categories[:1]
+    profile.categories[0].items = profile.categories[0].items[:1]
+    saved = await preference_store.save_profile(profile, bump_version=False)
+
+    loaded = await preference_store.load_profile(saved.profileId)
+    assert loaded is not None
+    categories = {category.id: category for category in loaded.categories}
+    assert "sensation_play" in categories
+    assert any(item.id == "power_submission" for item in categories["power_dynamics"].items)
+
+
 def test_matching_keeps_fantasy_and_real_world_boundaries_separate(temp_preference_dirs):
     import preference_logic
     import preference_store
@@ -164,3 +206,19 @@ def test_preference_api_create_export_and_random_fantasy(temp_preference_dirs):
 
     listed = c.get(f"/api/fantasies?profile_id={profile_id}").json()
     assert listed[0]["id"] == random_fantasy["id"]
+
+
+def test_local_dev_cors_allows_vite_alternate_port():
+    import main
+
+    c = TestClient(main.app)
+    r = c.options(
+        "/api/preference-profiles",
+        headers={
+            "Origin": "http://127.0.0.1:5174",
+            "Access-Control-Request-Method": "POST",
+            "Access-Control-Request-Headers": "content-type",
+        },
+    )
+    assert r.status_code == 200
+    assert r.headers["access-control-allow-origin"] == "http://127.0.0.1:5174"

@@ -1,5 +1,5 @@
 import { useCallback, useRef, useState } from 'react';
-import { apiUrl, parseErrorResponse } from '../lib/api';
+import { apiUrl, describeApiError, parseErrorResponse } from '../lib/api';
 
 export default function useNdjsonStream({ onError, onAbortWithTokens } = {}) {
   const [isStreaming, setIsStreaming] = useState(false);
@@ -53,7 +53,7 @@ export default function useNdjsonStream({ onError, onAbortWithTokens } = {}) {
       }
     } catch (e) {
       if (e.name === 'AbortError') aborted = true;
-      else onError?.(`Stream failure: ${e.message}`);
+      else onError?.(`Stream failure: ${describeApiError(e)}`);
     } finally {
       setIsStreaming(false);
       abortRef.current = null;
