@@ -21,18 +21,26 @@ import httpx
 from fastapi import Depends, FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, StreamingResponse
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, ValidationError
 
 import extraction
 import game_rules
 import memory
 import model_resolver
+import preference_logic
+import preference_store
 import prompt_builder
 import state_manager
 import summarizer
 from logging_config import campaign_id_ctx, configure_logging, request_id_ctx
 from model_resolver import NSFW_CREATIVE_MODEL
 from ollama_client import complete_json_detail, stream_chat
+from preference_schema import (
+    ContextType,
+    GeneratedFantasy,
+    SharingMode,
+    UserPreferenceProfile,
+)
 from rate_limit import chat_rate_limit
 from schema import (
     SCHEMA_VERSION,
@@ -46,6 +54,7 @@ from schema import (
     SamplingOverrides,
     StatBound,
 )
+from secure_storage import SecureStorageError
 
 configure_logging()
 log = logging.getLogger(__name__)
@@ -100,6 +109,7 @@ async def request_id_middleware(request, call_next):
 @app.on_event("startup")
 async def _startup() -> None:
     await state_manager.initialize()
+    await preference_store.initialize()
     memory.purge_deleted_memory_artifacts()
     log.info("Tavern Tales backend started (schema v%d).", SCHEMA_VERSION)
 
@@ -158,6 +168,42 @@ class DirectorPatchRequest(BaseModel):
     stat_bounds: dict[str, Any] | None = None
 
 
+class CreatePreferenceProfileRequest(BaseModel):
+    displayName: str = Field(default="Default Profile", max_length=120)
+    userId: str = Field(default="local_default", max_length=120)
+
+
+class ImportPreferenceProfileRequest(BaseModel):
+    profile: dict[str, Any]
+    userId: str = Field(default="local_default", max_length=120)
+
+
+class RandomFantasyRequest(BaseModel):
+    context: ContextType = ContextType.AI
+    selectedCount: int = Field(default=4, ge=1, le=6)
+    sharingMode: SharingMode = SharingMode.PRIVATE
+    save: bool = True
+
+
+class CompareProfilesRequest(BaseModel):
+    firstProfileId: str
+    secondProfileId: str
+    context: ContextType = ContextType.AI
+
+
+class ProtectFantasyRequest(BaseModel):
+    password: str = Field(..., min_length=8, max_length=512)
+    hint: str = Field(default="", max_length=160)
+
+
+class UnlockFantasyRequest(BaseModel):
+    password: str = Field(..., min_length=1, max_length=512)
+
+
+class SaveFantasyRequest(BaseModel):
+    fantasy: dict[str, Any]
+
+
 # ---------------------------------------------------------------------------
 # Root / diagnostics
 # ---------------------------------------------------------------------------
@@ -179,6 +225,182 @@ async def get_models():
         except Exception as e:
             log.warning("Failed to fetch Ollama model list: %s", e)
             return []
+
+
+# ---------------------------------------------------------------------------
+# Preference profiles / saved fantasies
+# ---------------------------------------------------------------------------
+
+
+def _sensitive_storage_http_error(e: Exception) -> HTTPException:
+    if isinstance(e, SecureStorageError):
+        return HTTPException(500, str(e))
+    if isinstance(e, ValueError):
+        return HTTPException(400, str(e))
+    if isinstance(e, ValidationError):
+        return HTTPException(422, e.errors())
+    return HTTPException(500, str(e))
+
+
+@app.get("/api/preference-profiles")
+async def list_preference_profiles(include_archived: bool = False):
+    try:
+        return [p.model_dump(mode="json") for p in await preference_store.list_profiles(include_archived)]
+    except Exception as e:  # noqa: BLE001
+        raise _sensitive_storage_http_error(e)
+
+
+@app.post("/api/preference-profiles")
+async def create_preference_profile(req: CreatePreferenceProfileRequest):
+    try:
+        profile = await preference_store.create_profile(req.displayName, user_id=req.userId)
+        return preference_logic.redact_profile(profile, include_private=True)
+    except Exception as e:  # noqa: BLE001
+        raise _sensitive_storage_http_error(e)
+
+
+@app.get("/api/preference-profiles/{profile_id}")
+async def get_preference_profile(profile_id: str, include_private: bool = True):
+    try:
+        profile = await preference_store.load_profile(profile_id)
+        if profile is None:
+            raise HTTPException(404, "preference profile not found")
+        return preference_logic.redact_profile(profile, include_private=include_private)
+    except HTTPException:
+        raise
+    except Exception as e:  # noqa: BLE001
+        raise _sensitive_storage_http_error(e)
+
+
+@app.put("/api/preference-profiles/{profile_id}")
+async def update_preference_profile(profile_id: str, body: dict[str, Any]):
+    try:
+        body["profileId"] = profile_id
+        profile = UserPreferenceProfile.model_validate(body)
+        saved = await preference_store.save_profile(profile, bump_version=True)
+        return preference_logic.redact_profile(saved, include_private=True)
+    except Exception as e:  # noqa: BLE001
+        raise _sensitive_storage_http_error(e)
+
+
+@app.get("/api/preference-profiles/{profile_id}/export")
+async def export_preference_profile(profile_id: str, include_private: bool = False):
+    try:
+        profile = await preference_store.load_profile(profile_id)
+        if profile is None:
+            raise HTTPException(404, "preference profile not found")
+        payload = preference_logic.redact_profile(profile, include_private=include_private)
+        suffix = "private" if include_private else "redacted"
+        return JSONResponse(
+            content={"profile": payload, "exportIncludesPrivate": include_private},
+            headers={"Content-Disposition": f'attachment; filename="{profile_id}.{suffix}.preferences.json"'},
+        )
+    except HTTPException:
+        raise
+    except Exception as e:  # noqa: BLE001
+        raise _sensitive_storage_http_error(e)
+
+
+@app.post("/api/preference-profiles/import")
+async def import_preference_profile(req: ImportPreferenceProfileRequest):
+    try:
+        profile = await preference_store.import_profile(req.profile, user_id=req.userId)
+        return preference_logic.redact_profile(profile, include_private=True)
+    except Exception as e:  # noqa: BLE001
+        raise _sensitive_storage_http_error(e)
+
+
+@app.post("/api/preference-profiles/{profile_id}/random-fantasy")
+async def create_random_preference_fantasy(profile_id: str, req: RandomFantasyRequest):
+    try:
+        profile = await preference_store.load_profile(profile_id)
+        if profile is None:
+            raise HTTPException(404, "preference profile not found")
+        fantasy = preference_logic.build_random_fantasy(
+            profile,
+            context=req.context,
+            selected_count=req.selectedCount,
+            sharing_mode=req.sharingMode,
+        )
+        if req.save:
+            fantasy = await preference_store.save_fantasy(fantasy)
+        return preference_logic.redact_fantasy(fantasy, include_private=True)
+    except HTTPException:
+        raise
+    except Exception as e:  # noqa: BLE001
+        raise _sensitive_storage_http_error(e)
+
+
+@app.post("/api/compatibility/compare")
+async def compare_preference_profiles(req: CompareProfilesRequest):
+    try:
+        first = await preference_store.load_profile(req.firstProfileId)
+        second = await preference_store.load_profile(req.secondProfileId)
+        if first is None or second is None:
+            raise HTTPException(404, "one or more preference profiles were not found")
+        return preference_logic.compare_profiles(first, second, context=req.context)
+    except HTTPException:
+        raise
+    except Exception as e:  # noqa: BLE001
+        raise _sensitive_storage_http_error(e)
+
+
+@app.get("/api/fantasies")
+async def list_saved_fantasies(profile_id: str | None = None):
+    try:
+        return [f.model_dump(mode="json") for f in await preference_store.list_fantasies(profile_id)]
+    except Exception as e:  # noqa: BLE001
+        raise _sensitive_storage_http_error(e)
+
+
+@app.post("/api/fantasies")
+async def save_generated_fantasy(req: SaveFantasyRequest):
+    try:
+        fantasy = GeneratedFantasy.model_validate(req.fantasy)
+        saved = await preference_store.save_fantasy(fantasy)
+        return preference_logic.redact_fantasy(saved, include_private=True)
+    except Exception as e:  # noqa: BLE001
+        raise _sensitive_storage_http_error(e)
+
+
+@app.get("/api/fantasies/{fantasy_id}")
+async def get_saved_fantasy(fantasy_id: str, include_private: bool = False):
+    try:
+        fantasy = await preference_store.load_fantasy(fantasy_id)
+        if fantasy is None:
+            raise HTTPException(404, "fantasy not found")
+        return preference_logic.redact_fantasy(fantasy, include_private=include_private)
+    except HTTPException:
+        raise
+    except Exception as e:  # noqa: BLE001
+        raise _sensitive_storage_http_error(e)
+
+
+@app.post("/api/fantasies/{fantasy_id}/protect")
+async def protect_saved_fantasy(fantasy_id: str, req: ProtectFantasyRequest):
+    try:
+        fantasy = await preference_store.protect_fantasy(fantasy_id, req.password, hint=req.hint)
+        if fantasy is None:
+            raise HTTPException(404, "fantasy not found")
+        return preference_logic.redact_fantasy(fantasy, include_private=True)
+    except HTTPException:
+        raise
+    except Exception as e:  # noqa: BLE001
+        raise _sensitive_storage_http_error(e)
+
+
+@app.post("/api/fantasies/{fantasy_id}/unlock")
+async def unlock_saved_fantasy(fantasy_id: str, req: UnlockFantasyRequest):
+    try:
+        fantasy = await preference_store.load_fantasy(fantasy_id)
+        if fantasy is None:
+            raise HTTPException(404, "fantasy not found")
+        content = preference_store.unlock_fantasy_content(fantasy, req.password)
+        return preference_logic.redact_fantasy(fantasy, include_private=True, unlocked_content=content)
+    except HTTPException:
+        raise
+    except Exception as e:  # noqa: BLE001
+        raise _sensitive_storage_http_error(e)
 
 
 # ---------------------------------------------------------------------------

@@ -131,15 +131,17 @@ def _coerce_json(content: str) -> tuple[dict[str, Any] | None, str | None]:
     try:
         return json.loads(raw), None
     except json.JSONDecodeError:
-        # Last-ditch: extract the first {...} block.
-        start = raw.find("{")
+        # Last-ditch: scan for a {...} block.  Models that emit a "Thinking
+        # Process:" preamble as plain text may have {}-chars from the schema
+        # example before the actual JSON object, so try each { position with
+        # the final } until one parses cleanly.
         end = raw.rfind("}")
-        if start >= 0 and end > start:
+        start = raw.find("{")
+        while start >= 0 and start < end:
             try:
                 return json.loads(raw[start:end + 1]), None
-            except json.JSONDecodeError as e2:
-                snippet = raw[:200].replace("\n", " ")
-                return None, f"JSON parse failure after fence/brace recovery: {e2} (raw starts: {snippet!r})"
+            except json.JSONDecodeError:
+                start = raw.find("{", start + 1)
         snippet = raw[:200].replace("\n", " ")
         return None, f"output is not valid JSON (raw starts: {snippet!r})"
 
@@ -168,7 +170,13 @@ async def complete_json_detail(
                 body = res.text[:300]
                 return None, f"Ollama HTTP {res.status_code} from {model}: {body}"
             data = res.json()
-            content = data.get("message", {}).get("content", "")
+            msg = data.get("message", {})
+            content = msg.get("content", "")
+            # Thinking models (e.g. Qwen3) may return an empty content field and
+            # place the actual response in "thinking" — fall back to it so that
+            # format:"json" requests don't fail with "empty content".
+            if not content.strip():
+                content = msg.get("thinking", "")
             result, parse_err = _coerce_json(content)
             if result is not None:
                 return result, None

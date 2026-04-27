@@ -22,6 +22,12 @@ backend/chroma_db/
 backend/chroma_db/**
 backend/states/
 backend/states/**
+backend/preferences/
+backend/preferences/**
+backend/fantasies/
+backend/fantasies/**
+backend/secure/
+backend/secure/**
 backend/campaign_states.json
 backend/campaign_states.json.*
 backend/*.legacy.bak

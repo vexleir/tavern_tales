@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import CampaignCreator from './CampaignCreator';
+import PreferenceProfiles from './PreferenceProfiles';
 import BannerProvider from './components/BannerProvider';
 import ModalProvider from './components/ModalProvider';
 import useBanner from './hooks/useBanner';
@@ -480,6 +481,11 @@ function AppInner() {
             className="bg-indigo-700 hover:bg-indigo-600 text-white w-full py-4 rounded-lg font-sans font-bold tracking-widest text-lg uppercase transition shadow-md mb-4"
           >+ Forge New World</button>
 
+          <button
+            onClick={() => setAppMode('profiles')}
+            className="bg-slate-800 hover:bg-slate-700 text-amber-400 border border-slate-600 w-full py-3 rounded-lg font-sans font-bold tracking-widest text-sm uppercase transition shadow-md mb-6"
+          >Preference Profiles</button>
+
           <label className="block mb-8">
             <span className="text-xs uppercase tracking-widest text-slate-400 font-sans">Import Campaign (.json)</span>
             <input
@@ -536,6 +542,10 @@ function AppInner() {
 
   if (appMode === 'setup') {
     return <CampaignCreator campaignId={activeCampaignId} onComplete={async () => { await loadCampaign(activeCampaignId); }} />;
+  }
+
+  if (appMode === 'profiles') {
+    return <PreferenceProfiles onBack={() => setAppMode('menu')} />;
   }
 
   const ctx = promptStats ? Math.round((promptStats.total_used / promptStats.model_context_window) * 100) : 0;
