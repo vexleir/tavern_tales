@@ -86,6 +86,8 @@ export default function CampaignCreator({ campaignId, initialFantasyDraft, onCom
   const [availableModels, setAvailableModels] = useState([]);
   const [gmModel, setGmModel] = useState('');
   const [utilityModel, setUtilityModel] = useState('');
+  const [gmFilter, setGmFilter] = useState('');
+  const [utilityFilter, setUtilityFilter] = useState('');
   const [submitError, setSubmitError] = useState('');
 
   useEffect(() => {
@@ -125,6 +127,10 @@ export default function CampaignCreator({ campaignId, initialFantasyDraft, onCom
 
   const handleGenerateWorld = async () => {
     if (!worldPrompt.trim()) return;
+    if (availableModels.length === 0) {
+      setSubmitError('No models found — make sure Ollama is running and you have pulled at least one model (e.g. ollama pull llama3.1:8b-instruct).');
+      return;
+    }
     setSubmitError('');
     setIsGenerating(true);
     try {
@@ -263,22 +269,50 @@ export default function CampaignCreator({ campaignId, initialFantasyDraft, onCom
         {/* Model configuration (A11) */}
         <section className="bg-fantasy-panel/40 border border-slate-700/50 rounded-xl p-6 shadow-md backdrop-blur">
           <h2 className="text-xl font-serif text-amber-500 mb-4 border-b border-slate-700/50 pb-2">Models</h2>
+          {availableModels.length === 0 && (
+            <div className="mb-4 bg-amber-950/40 border border-amber-700 rounded p-3 text-xs text-amber-200">
+              No models found — make sure Ollama is running, then pull a model in a terminal:
+              <pre className="mt-1 font-mono text-amber-300 text-xs">ollama pull llama3.1:8b-instruct</pre>
+            </div>
+          )}
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
             <div>
               <label className="block text-xs uppercase tracking-widest text-slate-400 mb-1">Narrator Model (GM)</label>
+              {availableModels.length > 4 && (
+                <input
+                  type="text"
+                  value={gmFilter}
+                  onChange={e => setGmFilter(e.target.value)}
+                  placeholder="Filter models..."
+                  className="w-full bg-fantasy-dark border border-slate-600 rounded px-2 py-1 text-xs focus:border-fantasy-accent focus:outline-none mb-1 text-slate-300 placeholder:text-slate-500"
+                />
+              )}
               <select value={gmModel} onChange={e=>handleGmModelChange(e.target.value)} className="w-full bg-fantasy-dark border border-slate-600 rounded px-3 py-2 focus:border-fantasy-accent focus:outline-none text-sm">
                 {availableModels.length === 0 && <option value="">(no models found — start Ollama)</option>}
-                {availableModels.map(m => <option key={m} value={m}>{m}</option>)}
+                {availableModels
+                  .filter(m => m.toLowerCase().includes(gmFilter.toLowerCase()))
+                  .map(m => <option key={m} value={m}>{m}</option>)}
               </select>
-              <p className="text-xs text-slate-500 mt-1 italic">Generates the narration.</p>
+              <p className="text-xs text-slate-500 mt-1 italic">The AI that writes your story. Larger models = richer narration.</p>
             </div>
             <div>
               <label className="block text-xs uppercase tracking-widest text-slate-400 mb-1">Utility Model (summary + state extraction)</label>
+              {availableModels.length > 4 && (
+                <input
+                  type="text"
+                  value={utilityFilter}
+                  onChange={e => setUtilityFilter(e.target.value)}
+                  placeholder="Filter models..."
+                  className="w-full bg-fantasy-dark border border-slate-600 rounded px-2 py-1 text-xs focus:border-fantasy-accent focus:outline-none mb-1 text-slate-300 placeholder:text-slate-500"
+                />
+              )}
               <select value={utilityModel} onChange={e=>handleUtilityModelChange(e.target.value)} className="w-full bg-fantasy-dark border border-slate-600 rounded px-3 py-2 focus:border-fantasy-accent focus:outline-none text-sm">
-                <option value="">(auto — fall back through llama3.1:8b, qwen2.5:7b, …)</option>
-                {availableModels.map(m => <option key={m} value={m}>{m}</option>)}
+                <option value="">(auto — falls back through llama3.1:8b → qwen2.5:7b → mistral)</option>
+                {availableModels
+                  .filter(m => m.toLowerCase().includes(utilityFilter.toLowerCase()))
+                  .map(m => <option key={m} value={m}>{m}</option>)}
               </select>
-              <p className="text-xs text-slate-500 mt-1 italic">Small instruct model recommended.</p>
+              <p className="text-xs text-slate-500 mt-1 italic">Used for world generation, summaries, and state tracking. Leave on auto if unsure — or pick the same model as the Narrator.</p>
             </div>
           </div>
         </section>

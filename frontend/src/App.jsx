@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import CampaignCreator from './CampaignCreator';
 import PreferenceProfiles from './PreferenceProfiles';
 import BannerProvider from './components/BannerProvider';
+import HelpModal from './components/HelpModal';
 import ModalProvider from './components/ModalProvider';
 import useBanner from './hooks/useBanner';
 import useModal from './hooks/useModal';
@@ -9,6 +10,15 @@ import useNdjsonStream from './hooks/useNdjsonStream';
 import { apiFetch, describeApiError } from './lib/api';
 
 const createCampaignId = () => `campaign_${Date.now()}`;
+
+const QUICK_ACTIONS = [
+  { label: '⚔ Attack', text: 'I attack [target] with [weapon].' },
+  { label: '🗣 Persuade', text: 'I attempt to persuade [character] to [goal].' },
+  { label: '🔍 Search', text: 'I carefully search the [area] for anything hidden.' },
+  { label: '🤫 Sneak', text: 'I try to move silently past [obstacle/character].' },
+  { label: '💤 Rest', text: 'I take a short rest to catch my breath and recover.' },
+  { label: '🎲 Roll', text: 'I roll to [skill/action].' },
+];
 
 function AppInner() {
   const [appMode, setAppMode] = useState('menu');
@@ -29,6 +39,10 @@ function AppInner() {
   const [renamingId, setRenamingId] = useState(null);
   const [renameDraft, setRenameDraft] = useState('');
   const [pendingFantasyDraft, setPendingFantasyDraft] = useState(null);
+  const [helpOpen, setHelpOpen] = useState(false);
+  const [showQuickActions, setShowQuickActions] = useState(() => {
+    try { return window.localStorage?.getItem('tt_quick_actions') === 'true'; } catch { return false; }
+  });
 
   const modal = useModal();
   const banner = useBanner();
@@ -453,6 +467,12 @@ function AppInner() {
     }
   };
 
+  const toggleQuickActions = () => {
+    const next = !showQuickActions;
+    setShowQuickActions(next);
+    try { window.localStorage?.setItem('tt_quick_actions', String(next)); } catch { /* storage unavailable */ }
+  };
+
   // -------------------------------------------------------- inspector
 
   const openInspector = async () => {
@@ -476,7 +496,13 @@ function AppInner() {
     return (
       <div className="min-h-screen bg-fantasy-dark text-fantasy-text font-serif flex flex-col items-center justify-center p-8">
         <h1 className="text-6xl text-fantasy-accent drop-shadow-md mb-12 border-b border-slate-700 pb-4">Tavern Tales Reborn</h1>
-        <div className="bg-fantasy-panel/40 border border-slate-700/50 rounded-xl shadow-lg backdrop-blur p-8 w-full max-w-2xl text-center">
+        <div className="bg-fantasy-panel/40 border border-slate-700/50 rounded-xl shadow-lg backdrop-blur p-8 w-full max-w-2xl text-center relative">
+          <button
+            onClick={() => setHelpOpen(true)}
+            title="Help & Documentation"
+            className="absolute top-4 right-4 text-xs text-slate-400 hover:text-amber-400 border border-slate-600 hover:border-amber-600 rounded-full w-7 h-7 flex items-center justify-center transition font-sans font-bold"
+          >?</button>
+
           <button
             onClick={() => { setPendingFantasyDraft(null); setActiveCampaignId(createCampaignId()); setAppMode('setup'); }}
             className="bg-indigo-700 hover:bg-indigo-600 text-white w-full py-4 rounded-lg font-sans font-bold tracking-widest text-lg uppercase transition shadow-md mb-4"
@@ -484,8 +510,12 @@ function AppInner() {
 
           <button
             onClick={() => setAppMode('profiles')}
-            className="bg-slate-800 hover:bg-slate-700 text-amber-400 border border-slate-600 w-full py-3 rounded-lg font-sans font-bold tracking-widest text-sm uppercase transition shadow-md mb-6"
+            className="bg-slate-800 hover:bg-slate-700 text-amber-400 border border-slate-600 w-full py-3 rounded-lg font-sans font-bold tracking-widest text-sm uppercase transition shadow-md mb-2"
           >Preference Profiles</button>
+          {pendingFantasyDraft && (
+            <p className="text-xs text-amber-400 italic mb-4">Campaign seeded from: {pendingFantasyDraft.title || 'a saved fantasy draft'}</p>
+          )}
+          {!pendingFantasyDraft && <div className="mb-4" />}
 
           <label className="block mb-8">
             <span className="text-xs uppercase tracking-widest text-slate-400 font-sans">Import Campaign (.json)</span>
@@ -537,6 +567,7 @@ function AppInner() {
             ))}
           </div>
         </div>
+        {helpOpen && <HelpModal onClose={() => setHelpOpen(false)} />}
       </div>
     );
   }
@@ -786,7 +817,7 @@ function AppInner() {
           </div>
           <div className="flex items-center gap-3 flex-wrap">
             {promptStats && (
-              <div className="flex items-center gap-2 text-xs text-slate-400 border-r border-slate-600 pr-3">
+              <div title="Token usage — green: fine, amber: getting full, red: near limit" className="flex items-center gap-2 text-xs text-slate-400 border-r border-slate-600 pr-3">
                 <div className="w-32 h-1.5 bg-slate-700 rounded overflow-hidden">
                   <div className={`h-full ${ctx > 85 ? 'bg-red-500' : ctx > 65 ? 'bg-amber-500' : 'bg-emerald-500'}`} style={{ width: `${Math.min(ctx, 100)}%` }} />
                 </div>
@@ -800,18 +831,24 @@ function AppInner() {
             )}
             {directorMode && (
               <>
-                <button onClick={openInspector} className="text-xs px-3 py-1 bg-slate-700 hover:bg-slate-600 text-slate-200 border border-slate-600 rounded">Inspect Prompt</button>
-                <button onClick={handleDebugExport} className="text-xs px-3 py-1 bg-slate-700 hover:bg-slate-600 text-slate-200 border border-slate-600 rounded">Debug Bundle</button>
-                <button onClick={handleUndo} disabled={undoStack.length === 0} className="text-xs px-3 py-1 bg-slate-700 hover:bg-slate-600 text-slate-200 border border-slate-600 rounded disabled:opacity-40">Undo ({undoStack.length})</button>
-                <button onClick={handleFork} className="text-xs px-3 py-1 bg-amber-600/30 hover:bg-amber-600/50 text-amber-400 border border-amber-600/50 rounded">Fork Timeline</button>
+                <button onClick={openInspector} title="View the full system prompt sent to the AI this turn" className="text-xs px-3 py-1 bg-slate-700 hover:bg-slate-600 text-slate-200 border border-slate-600 rounded">Inspect Prompt</button>
+                <button onClick={handleDebugExport} title="Export a JSON snapshot of campaign state and memories" className="text-xs px-3 py-1 bg-slate-700 hover:bg-slate-600 text-slate-200 border border-slate-600 rounded">Debug Bundle</button>
+                <button onClick={handleUndo} disabled={undoStack.length === 0} title="Remove the last director edit and revert all side effects (Ctrl+Z)" className="text-xs px-3 py-1 bg-slate-700 hover:bg-slate-600 text-slate-200 border border-slate-600 rounded disabled:opacity-40">Undo ({undoStack.length})</button>
+                <button onClick={handleFork} title="Duplicate the story at this moment and start an alternate path" className="text-xs px-3 py-1 bg-amber-600/30 hover:bg-amber-600/50 text-amber-400 border border-amber-600/50 rounded">Fork Timeline</button>
               </>
             )}
             <button
               onClick={() => setDirectorMode(!directorMode)}
+              title={directorMode ? 'Exit the editor and return to normal play' : 'Open the editor to change NPCs, stats, and world details mid-story'}
               className={`text-sm px-4 py-1.5 rounded transition shadow-sm font-semibold border ${directorMode ? 'bg-amber-600/20 text-amber-500 border-amber-600/50' : 'bg-fantasy-dark text-slate-300 border-slate-600 hover:bg-slate-700'}`}
             >
               {directorMode ? 'Exit Director Mode' : 'Director Mode'}
             </button>
+            <button
+              onClick={() => setHelpOpen(true)}
+              title="Help & Documentation"
+              className="text-xs px-3 py-1 bg-slate-700 hover:bg-slate-600 text-slate-200 border border-slate-600 rounded font-bold"
+            >?</button>
           </div>
         </header>
 
@@ -836,9 +873,9 @@ function AppInner() {
           {isStreaming && <div className="text-sm text-amber-600/70 italic animate-pulse font-serif px-2">The storyteller is weaving the thread...</div>}
           {!isStreaming && lastGmMsg && lastGmMsg.id && !lastGmMsg.id.startsWith('temp') && (
             <div className="flex gap-2 text-xs">
-              <button onClick={handleRegenerate} className="bg-slate-800 text-amber-400 border border-slate-600 hover:bg-slate-700 px-3 py-1 rounded-full shadow-md font-bold">↻ Reroll</button>
+              <button onClick={handleRegenerate} title="Discard the GM's last response and generate a new one" className="bg-slate-800 text-amber-400 border border-slate-600 hover:bg-slate-700 px-3 py-1 rounded-full shadow-md font-bold">↻ Reroll</button>
               {canContinue && (
-                <button onClick={handleContinue} className="bg-slate-800 text-emerald-400 border border-slate-600 hover:bg-slate-700 px-3 py-1 rounded-full shadow-md font-bold">→ Continue</button>
+                <button onClick={handleContinue} title="Ask the GM to keep writing without a new player action" className="bg-slate-800 text-emerald-400 border border-slate-600 hover:bg-slate-700 px-3 py-1 rounded-full shadow-md font-bold">→ Continue</button>
               )}
             </div>
           )}
@@ -846,6 +883,26 @@ function AppInner() {
         </div>
 
         <div className="p-4 bg-fantasy-panel border-t border-slate-700/50 shadow-[0_-4px_6px_-1px_rgba(0,0,0,0.1)]">
+          <div className="max-w-4xl mx-auto mb-2">
+            <button
+              onClick={toggleQuickActions}
+              title="Toggle action shortcut buttons"
+              className="text-xs text-slate-400 hover:text-amber-400 border border-slate-700 hover:border-amber-700 rounded px-2 py-1 transition font-sans"
+            >⚡ Actions {showQuickActions ? '▾' : '▸'}</button>
+            {showQuickActions && (
+              <div className="flex flex-wrap gap-2 mt-2">
+                {QUICK_ACTIONS.map(a => (
+                  <button
+                    key={a.label}
+                    onClick={() => setInput(a.text)}
+                    disabled={isStreaming}
+                    title={`Pre-fill: "${a.text}"`}
+                    className="text-xs bg-slate-800 border border-slate-600 hover:bg-slate-700 hover:border-fantasy-accent text-slate-300 px-3 py-1.5 rounded transition disabled:opacity-40"
+                  >{a.label}</button>
+                ))}
+              </div>
+            )}
+          </div>
           <div className="max-w-4xl mx-auto flex gap-3">
             <textarea
               rows={1}
@@ -876,6 +933,8 @@ function AppInner() {
           </div>
         </div>
       </main>
+
+      {helpOpen && <HelpModal onClose={() => setHelpOpen(false)} />}
 
       {/* Prompt inspector modal */}
       {inspectorOpen && lastPrompt && (
