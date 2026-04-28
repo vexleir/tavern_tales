@@ -11,6 +11,7 @@ from preference_schema import (
     ContextType,
     FantasyInterest,
     GeneratedFantasy,
+    GiverReceiverRole,
     IntensityPreference,
     PartnerSharePermission,
     PreferenceItem,
@@ -57,6 +58,22 @@ SHARE_RANK = {
     PartnerSharePermission.SUMMARY: 2,
     PartnerSharePermission.FULL: 3,
 }
+
+
+def _roles_compatible(a: GiverReceiverRole, b: GiverReceiverRole) -> bool:
+    if a == GiverReceiverRole.BOTH or b == GiverReceiverRole.BOTH:
+        return True
+    return a != b
+
+
+def _shared_role(a: GiverReceiverRole, b: GiverReceiverRole) -> str:
+    if a == GiverReceiverRole.BOTH and b == GiverReceiverRole.BOTH:
+        return GiverReceiverRole.BOTH.value
+    if a == GiverReceiverRole.BOTH:
+        return b.value
+    if b == GiverReceiverRole.BOTH:
+        return a.value
+    return f"first_{a.value}_second_{b.value}"
 
 
 def iter_items(profile: UserPreferenceProfile) -> list[tuple[str, PreferenceItem]]:
@@ -137,6 +154,8 @@ def compare_profiles(
             reasons.append("fantasy_interest_not_mutual")
         if lowest_text == 0:
             reasons.append("text_roleplay_not_mutual")
+        if not _roles_compatible(a.giverReceiverRole, b.giverReceiverRole):
+            reasons.append("giver_receiver_not_complementary")
         if share_permission == PartnerSharePermission.PRIVATE:
             reasons.append("share_permission_private")
         if a.realWorldWillingness == RealWorldWillingness.HARD_NO or b.realWorldWillingness == RealWorldWillingness.HARD_NO:
@@ -155,6 +174,11 @@ def compare_profiles(
             "realWorldWillingness": real_world.value,
             "fantasyOnly": fantasy_only,
             "intensityPreference": _lowest_intensity(a.intensityPreference, b.intensityPreference).value,
+            "giverReceiverRole": _shared_role(a.giverReceiverRole, b.giverReceiverRole),
+            "profileRoles": {
+                first.profileId: a.giverReceiverRole.value,
+                second.profileId: b.giverReceiverRole.value,
+            },
             "partnerSharePermission": share_permission.value,
             "commentsShareable": (
                 a.commentsShareable if share_permission == PartnerSharePermission.FULL else ""
@@ -206,6 +230,7 @@ def build_preference_snapshot(
                 "realWorldWillingness": item.realWorldWillingness.value,
                 "fantasyOnly": item.fantasyOnly,
                 "intensityPreference": item.intensityPreference.value,
+                "giverReceiverRole": item.giverReceiverRole.value,
             }
             for category_id, item in selected
         ],
@@ -248,6 +273,7 @@ def build_random_fantasy(
     snapshot = build_preference_snapshot(profile, selected, include_reality_bridge=False)
 
     labels = [item.label for _, item in selected]
+    role_bits = [f"{item.label}: {item.giverReceiverRole.value}" for _, item in selected]
     if not labels:
         labels = ["slow-burn character tension", "clear boundaries", "collaborative worldbuilding"]
 
@@ -274,6 +300,8 @@ def build_random_fantasy(
         + "; ".join(labels)
         + "."
     )
+    if role_bits:
+        seed_prompt += " Giver/receiver preferences: " + "; ".join(role_bits) + "."
     if identity_bits:
         seed_prompt += " Profile context: " + "; ".join(identity_bits) + "."
     if profile.globalPreferences.fadeToBlack:
@@ -313,13 +341,17 @@ def build_random_fantasy(
 def redact_fantasy(fantasy: GeneratedFantasy, include_private: bool = False, unlocked_content: str | None = None) -> dict[str, Any]:
     data = deepcopy(fantasy).model_dump(mode="json")
     protected = bool(data.get("passwordProtection", {}).get("enabled"))
+    data["protectedContent"] = None
     if protected:
         data["content"] = unlocked_content if unlocked_content is not None else ""
         if unlocked_content is None:
             data["locked"] = True
+            data["synopsis"] = ""
+            data["seedPrompt"] = ""
+            data["campaignSeed"] = CampaignSeed().model_dump(mode="json")
+            data["realityBridgeNotes"] = ""
     if not include_private:
         data["realityBridgeNotes"] = ""
-        data["protectedContent"] = None
         data["preferenceSnapshot"]["globalContext"] = {
             k: v for k, v in data["preferenceSnapshot"].get("globalContext", {}).items()
             if k in {"preferredPOV", "fadeToBlack", "consentStyle"}

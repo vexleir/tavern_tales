@@ -10,6 +10,8 @@ const povOptions = ['first', 'third'];
 const roleOptions = ['dominant', 'submissive', 'switch', 'none'];
 const consentOptions = ['explicit', 'implied', 'negotiated'];
 const customResponseOptions = ['scale', 'yes_no', 'multi_select', 'text'];
+const giverReceiverOptions = ['giver', 'receiver', 'both'];
+const fantasyOnlyRealWorldValues = new Set(['hard_no', 'soft_no']);
 
 function labelize(value) {
   return String(value || '').replaceAll('_', ' ');
@@ -62,7 +64,7 @@ function TextControl({ label, value, onChange, rows = 2, placeholder = '', readO
   );
 }
 
-export default function PreferenceProfiles({ onBack }) {
+export default function PreferenceProfiles({ onBack, onCreateCampaignFromDraft }) {
   const [profiles, setProfiles] = useState([]);
   const [profile, setProfile] = useState(null);
   const [fantasies, setFantasies] = useState([]);
@@ -70,7 +72,10 @@ export default function PreferenceProfiles({ onBack }) {
   const [newProfileName, setNewProfileName] = useState('');
   const [customDraft, setCustomDraft] = useState({ label: '', description: '', responseType: 'text' });
   const [protectDraft, setProtectDraft] = useState({ password: '', hint: '' });
+  const [unlockDraft, setUnlockDraft] = useState({ password: '', unlocked: false });
   const [includePrivateExport, setIncludePrivateExport] = useState(false);
+  const [compareProfileId, setCompareProfileId] = useState('');
+  const [comparison, setComparison] = useState(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
 
@@ -110,6 +115,7 @@ export default function PreferenceProfiles({ onBack }) {
       const data = await res.json();
       setProfile(data);
       setActiveFantasy(null);
+      setComparison(null);
       await loadFantasies(profileId);
     } catch (e) {
       setError(`Could not open profile: ${describeApiError(e)}`);
@@ -178,6 +184,29 @@ export default function PreferenceProfiles({ onBack }) {
     }
   };
 
+  const deleteProfile = async () => {
+    if (!profile) return;
+    const ok = window.confirm(`Delete "${profile.displayName || 'this profile'}"? Saved fantasy drafts will remain independent.`);
+    if (!ok) return;
+    setBusy(true);
+    setError('');
+    try {
+      const res = await apiFetch(`/api/preference-profiles/${profile.profileId}`, { method: 'DELETE' });
+      if (!res.ok) throw new Error(await parseErrorResponse(res));
+      const remaining = await loadProfiles();
+      setProfile(null);
+      setActiveFantasy(null);
+      setFantasies([]);
+      if (remaining.length > 0) {
+        await openProfile(remaining[0].profileId);
+      }
+    } catch (e) {
+      setError(`Could not delete profile: ${describeApiError(e)}`);
+    } finally {
+      setBusy(false);
+    }
+  };
+
   const patchProfile = (mutator) => {
     setProfile(current => {
       if (!current) return current;
@@ -223,6 +252,7 @@ export default function PreferenceProfiles({ onBack }) {
           realWorldWillingness: 'hard_no',
           textRoleplayWillingness: 'no',
           fantasyOnly: true,
+          giverReceiverRole: 'both',
           context: ['ai'],
           partnerSharePermission: 'private',
           commentsPrivate: '',
@@ -272,6 +302,7 @@ export default function PreferenceProfiles({ onBack }) {
       if (!res.ok) throw new Error(await parseErrorResponse(res));
       setActiveFantasy(await res.json());
       setProtectDraft({ password: '', hint: '' });
+      setUnlockDraft({ password: '', unlocked: false });
     } catch (e) {
       setError(`Could not open fantasy draft: ${describeApiError(e)}`);
     } finally {
@@ -292,9 +323,89 @@ export default function PreferenceProfiles({ onBack }) {
       if (!res.ok) throw new Error(await parseErrorResponse(res));
       setActiveFantasy(await res.json());
       setProtectDraft({ password: '', hint: '' });
+      setUnlockDraft({ password: '', unlocked: false });
       await loadFantasies(activeFantasy.ownerProfileId);
     } catch (e) {
       setError(`Could not protect draft: ${describeApiError(e)}`);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const unlockFantasy = async () => {
+    if (!activeFantasy || !unlockDraft.password) return;
+    setBusy(true);
+    setError('');
+    try {
+      const res = await apiFetch(`/api/fantasies/${activeFantasy.id}/unlock`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ password: unlockDraft.password })
+      });
+      if (!res.ok) throw new Error(await parseErrorResponse(res));
+      setActiveFantasy(await res.json());
+      setUnlockDraft(d => ({ ...d, unlocked: true }));
+    } catch (e) {
+      setError(`Could not unlock draft: ${describeApiError(e)}`);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const updateActiveFantasy = (patch) => {
+    setActiveFantasy(current => (
+      current ? { ...current, ...patch, updatedAt: nowIso() } : current
+    ));
+  };
+
+  const saveActiveFantasy = async () => {
+    if (!activeFantasy) return;
+    setBusy(true);
+    setError('');
+    try {
+      const body = {
+        fantasy: activeFantasy
+      };
+      if (activeFantasy.passwordProtection?.enabled && unlockDraft.unlocked) {
+        body.password = unlockDraft.password;
+      }
+      const res = await apiFetch(`/api/fantasies/${activeFantasy.id}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body)
+      });
+      if (!res.ok) throw new Error(await parseErrorResponse(res));
+      const saved = await res.json();
+      setActiveFantasy(saved);
+      if (saved.passwordProtection?.enabled) {
+        setUnlockDraft({ password: '', unlocked: false });
+      }
+      await loadFantasies(saved.ownerProfileId);
+    } catch (e) {
+      setError(`Could not save draft: ${describeApiError(e)}`);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const compareProfiles = async () => {
+    if (!profile || !compareProfileId || compareProfileId === profile.profileId) return;
+    setBusy(true);
+    setError('');
+    try {
+      const res = await apiFetch('/api/compatibility/compare', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          firstProfileId: profile.profileId,
+          secondProfileId: compareProfileId,
+          context: 'ai'
+        })
+      });
+      if (!res.ok) throw new Error(await parseErrorResponse(res));
+      setComparison(await res.json());
+    } catch (e) {
+      setError(`Could not compare profiles: ${describeApiError(e)}`);
     } finally {
       setBusy(false);
     }
@@ -337,6 +448,8 @@ export default function PreferenceProfiles({ onBack }) {
   const visibleCustoms = (profile?.customPreferences || [])
     .map((question, index) => ({ question, index }))
     .filter(({ question }) => question.status !== 'deleted');
+  const fantasyIsLocked = Boolean(activeFantasy?.passwordProtection?.enabled && !unlockDraft.unlocked);
+  const compareOptions = profiles.filter(summary => summary.profileId !== profile?.profileId);
 
   return (
     <div className="min-h-screen bg-fantasy-dark text-fantasy-text font-sans">
@@ -391,6 +504,7 @@ export default function PreferenceProfiles({ onBack }) {
               Include private fields
             </label>
             <button onClick={exportProfile} disabled={!profile} className="bg-slate-800 hover:bg-slate-700 disabled:opacity-50 border border-slate-600 rounded px-3 py-2 text-sm">Export Profile</button>
+            <button onClick={deleteProfile} disabled={!profile || busy} className="bg-red-900/40 hover:bg-red-800 disabled:opacity-50 text-red-200 border border-red-900/50 rounded px-3 py-2 text-sm">Delete Profile</button>
             <label className="block">
               <span className="text-xs uppercase tracking-widest text-slate-400">Import profile</span>
               <input
@@ -459,13 +573,18 @@ export default function PreferenceProfiles({ onBack }) {
                         <div className="grid grid-cols-1 md:grid-cols-4 gap-3">
                           <SelectControl label="Fantasy interest" value={item.fantasyInterest} options={fantasyInterestOptions} onChange={(v) => updateItem(categoryIndex, itemIndex, { fantasyInterest: v })} />
                           <SelectControl label="Text roleplay" value={item.textRoleplayWillingness} options={textRoleplayOptions} onChange={(v) => updateItem(categoryIndex, itemIndex, { textRoleplayWillingness: v })} />
-                          <SelectControl label="Real world" value={item.realWorldWillingness} options={realWorldOptions} onChange={(v) => updateItem(categoryIndex, itemIndex, { realWorldWillingness: v })} />
+                          <SelectControl
+                            label="Real world interest"
+                            value={item.realWorldWillingness}
+                            options={realWorldOptions}
+                            onChange={(v) => updateItem(categoryIndex, itemIndex, {
+                              realWorldWillingness: v,
+                              fantasyOnly: fantasyOnlyRealWorldValues.has(v)
+                            })}
+                          />
                           <SelectControl label="Intensity" value={item.intensityPreference} options={intensityOptions} onChange={(v) => updateItem(categoryIndex, itemIndex, { intensityPreference: v })} />
+                          <SelectControl label="Giver / Receiver" value={item.giverReceiverRole || 'both'} options={giverReceiverOptions} onChange={(v) => updateItem(categoryIndex, itemIndex, { giverReceiverRole: v })} />
                           <SelectControl label="Partner share" value={item.partnerSharePermission} options={shareOptions} onChange={(v) => updateItem(categoryIndex, itemIndex, { partnerSharePermission: v })} />
-                          <label className="flex items-end gap-2 text-sm text-slate-300 pb-2">
-                            <input type="checkbox" checked={Boolean(item.fantasyOnly)} onChange={(e) => updateItem(categoryIndex, itemIndex, { fantasyOnly: e.target.checked })} className="accent-amber-500" />
-                            Fantasy only
-                          </label>
                           <TextControl label="Private notes" value={item.commentsPrivate} onChange={(v) => updateItem(categoryIndex, itemIndex, { commentsPrivate: v })} />
                           <TextControl label="Shareable notes" value={item.commentsShareable} onChange={(v) => updateItem(categoryIndex, itemIndex, { commentsShareable: v })} />
                         </div>
@@ -491,8 +610,9 @@ export default function PreferenceProfiles({ onBack }) {
                 </div>
                 <div className="flex flex-col gap-3">
                   {visibleCustoms.map(({ question, index }) => (
-                    <div key={question.id || index} className="bg-fantasy-dark/50 border border-slate-700 rounded p-4 grid grid-cols-1 md:grid-cols-[1fr_160px_120px_100px] gap-3">
+                    <div key={question.id || index} className="bg-fantasy-dark/50 border border-slate-700 rounded p-4 grid grid-cols-1 md:grid-cols-[1fr_140px_140px_120px_100px] gap-3">
                       <TextControl label={`Question${question.status === 'archived' ? ' (archived)' : ''}`} rows={2} value={question.label} onChange={(v) => updateCustom(index, { label: v })} />
+                      <SelectControl label="Giver / Receiver" value={question.giverReceiverRole || 'both'} options={giverReceiverOptions} onChange={(v) => updateCustom(index, { giverReceiverRole: v })} />
                       <SelectControl label="Sharing" value={question.partnerSharePermission || 'private'} options={shareOptions} onChange={(v) => updateCustom(index, { partnerSharePermission: v })} />
                       <button onClick={() => updateCustom(index, { status: question.status === 'archived' ? 'active' : 'archived' })} className="self-end bg-slate-800 hover:bg-slate-700 border border-slate-600 rounded px-3 py-2 text-sm">
                         {question.status === 'archived' ? 'Restore' : 'Archive'}
@@ -527,6 +647,55 @@ export default function PreferenceProfiles({ onBack }) {
         <aside className="border-l border-slate-700/70 bg-fantasy-panel/50 p-4 flex flex-col gap-4 overflow-y-auto">
           <button onClick={generateFantasyDraft} disabled={!profile || busy} className="bg-indigo-700 hover:bg-indigo-600 disabled:opacity-50 text-white rounded-lg px-4 py-3 text-sm font-bold uppercase tracking-widest">Random Fantasy Draft</button>
 
+          <section className="bg-fantasy-dark/50 border border-slate-700 rounded-lg p-4 flex flex-col gap-3">
+            <h2 className="text-xs uppercase tracking-widest text-slate-400">Compare Profiles</h2>
+            <select
+              value={compareProfileId}
+              onChange={(e) => { setCompareProfileId(e.target.value); setComparison(null); }}
+              disabled={!profile || compareOptions.length === 0}
+              className="bg-fantasy-dark border border-slate-600 rounded px-3 py-2 text-sm text-slate-200 focus:outline-none focus:border-fantasy-accent disabled:opacity-50"
+            >
+              <option value="">Select another profile</option>
+              {compareOptions.map(summary => (
+                <option key={summary.profileId} value={summary.profileId}>{summary.displayName}</option>
+              ))}
+            </select>
+            <button onClick={compareProfiles} disabled={!profile || !compareProfileId || busy} className="bg-slate-800 hover:bg-slate-700 disabled:opacity-50 border border-slate-600 rounded px-3 py-2 text-sm">Compare</button>
+            {comparison && (
+              <div className="text-sm flex flex-col gap-3">
+                <div className="text-xs text-slate-500">{comparison.safetyPrinciple}</div>
+                <div className="grid grid-cols-3 gap-2 text-center">
+                  <div className="bg-slate-950/40 border border-slate-700 rounded p-2">
+                    <div className="text-lg font-bold text-emerald-300">{comparison.matches?.length || 0}</div>
+                    <div className="text-xs text-slate-500 uppercase tracking-wider">Matches</div>
+                  </div>
+                  <div className="bg-slate-950/40 border border-slate-700 rounded p-2">
+                    <div className="text-lg font-bold text-amber-300">{comparison.blocked?.length || 0}</div>
+                    <div className="text-xs text-slate-500 uppercase tracking-wider">Blocked</div>
+                  </div>
+                  <div className="bg-slate-950/40 border border-slate-700 rounded p-2">
+                    <div className="text-lg font-bold text-red-300">{comparison.realityBridgeExcludedThemeIds?.length || 0}</div>
+                    <div className="text-xs text-slate-500 uppercase tracking-wider">Reality no</div>
+                  </div>
+                </div>
+                {(comparison.matches || []).slice(0, 5).map(match => (
+                  <div key={match.id} className="bg-slate-950/40 border border-slate-700 rounded p-2">
+                    <div className="font-bold text-amber-400">{match.label}</div>
+                    <div className="text-xs text-slate-400 mt-1">
+                      {labelize(match.fantasyInterest)} interest / {labelize(match.textRoleplayWillingness)} text / {labelize(match.realWorldWillingness)} real world
+                    </div>
+                    <div className="text-xs text-slate-500 mt-1">
+                      {labelize(match.intensityPreference)} intensity / {labelize(match.giverReceiverRole)} role
+                    </div>
+                  </div>
+                ))}
+                {comparison.matches?.length === 0 && (
+                  <div className="text-xs text-slate-500 italic">No mutually compatible shared themes for this context.</div>
+                )}
+              </div>
+            )}
+          </section>
+
           <section className="flex flex-col gap-2">
             <h2 className="text-xs uppercase tracking-widest text-slate-400">Saved drafts</h2>
             {fantasies.length === 0 && <p className="text-sm text-slate-500 italic">No saved drafts.</p>}
@@ -548,18 +717,44 @@ export default function PreferenceProfiles({ onBack }) {
 
           {activeFantasy && (
             <section className="bg-fantasy-dark/50 border border-slate-700 rounded-lg p-4 flex flex-col gap-4">
-              <div>
-                <h2 className="text-lg font-serif text-amber-500">{activeFantasy.title}</h2>
+              <div className="flex flex-col gap-2">
+                <label className="flex flex-col gap-1 text-xs text-slate-400">
+                  <span className="uppercase tracking-widest">Draft title</span>
+                  <input
+                    value={activeFantasy.title || ''}
+                    readOnly={fantasyIsLocked}
+                    onChange={(e) => updateActiveFantasy({ title: e.target.value })}
+                    className="bg-fantasy-dark border border-slate-600 rounded px-3 py-2 text-base font-bold text-amber-400 focus:outline-none focus:border-fantasy-accent disabled:opacity-50"
+                  />
+                </label>
                 <p className="text-xs text-slate-500 mt-1">{activeFantasy.id}</p>
               </div>
-              <TextControl label="Synopsis" rows={4} value={activeFantasy.synopsis || activeFantasy.content || ''} onChange={() => {}} readOnly />
-              <TextControl label="Seed prompt" rows={6} value={activeFantasy.seedPrompt || ''} onChange={() => {}} readOnly />
-              {activeFantasy.campaignSeed && (
+              {fantasyIsLocked ? (
+                <div className="border border-amber-800 bg-amber-950/30 rounded p-3 text-sm text-amber-100">
+                  This draft is password protected. Unlock it to view or edit the protected fantasy text.
+                </div>
+              ) : (
+                <>
+                  <TextControl label="Synopsis" rows={4} value={activeFantasy.synopsis || ''} onChange={(v) => updateActiveFantasy({ synopsis: v })} />
+                  <TextControl label="Fantasy draft" rows={7} value={activeFantasy.content || ''} onChange={(v) => updateActiveFantasy({ content: v })} />
+                  <TextControl label="Seed prompt" rows={6} value={activeFantasy.seedPrompt || ''} onChange={(v) => updateActiveFantasy({ seedPrompt: v })} />
+                  <TextControl label="Reality bridge notes" rows={3} value={activeFantasy.realityBridgeNotes || ''} onChange={(v) => updateActiveFantasy({ realityBridgeNotes: v })} />
+                </>
+              )}
+              {!fantasyIsLocked && activeFantasy.campaignSeed && (
                 <div className="text-xs text-slate-400 bg-slate-950/40 border border-slate-700 rounded p-3">
                   <div className="uppercase tracking-widest text-slate-500 mb-2">Campaign seed</div>
                   <div className="text-slate-300 whitespace-pre-wrap">{activeFantasy.campaignSeed.startingScene}</div>
                 </div>
               )}
+              <button onClick={saveActiveFantasy} disabled={busy || fantasyIsLocked} className="bg-fantasy-accent hover:bg-amber-600 disabled:opacity-50 text-white rounded px-3 py-2 text-sm font-bold">Save Draft</button>
+              <button
+                onClick={() => onCreateCampaignFromDraft?.(activeFantasy)}
+                disabled={busy || fantasyIsLocked || !onCreateCampaignFromDraft}
+                className="bg-indigo-700 hover:bg-indigo-600 disabled:opacity-50 text-white rounded px-3 py-2 text-sm font-bold"
+              >
+                Use Draft in Campaign Setup
+              </button>
               {!activeFantasy.passwordProtection?.enabled ? (
                 <div className="border-t border-slate-700 pt-4 flex flex-col gap-2">
                   <input
@@ -578,7 +773,24 @@ export default function PreferenceProfiles({ onBack }) {
                   <button onClick={protectFantasy} disabled={protectDraft.password.length < 8 || busy} className="bg-slate-800 hover:bg-slate-700 disabled:opacity-50 border border-slate-600 rounded px-3 py-2 text-sm">Password Protect</button>
                 </div>
               ) : (
-                <div className="border border-emerald-800 bg-emerald-950/30 text-emerald-200 rounded p-3 text-sm">Password protected</div>
+                <div className="border border-emerald-800 bg-emerald-950/30 text-emerald-200 rounded p-3 text-sm flex flex-col gap-2">
+                  <div>Password protected{unlockDraft.unlocked ? ' and unlocked for this edit session' : ''}</div>
+                  {!unlockDraft.unlocked && (
+                    <>
+                      {activeFantasy.passwordProtection?.hint && (
+                        <div className="text-xs text-emerald-300/80">Hint: {activeFantasy.passwordProtection.hint}</div>
+                      )}
+                      <input
+                        type="password"
+                        value={unlockDraft.password}
+                        onChange={(e) => setUnlockDraft(d => ({ ...d, password: e.target.value }))}
+                        placeholder="Password"
+                        className="bg-fantasy-dark border border-slate-600 rounded px-3 py-2 text-sm text-slate-200 focus:outline-none focus:border-fantasy-accent"
+                      />
+                      <button onClick={unlockFantasy} disabled={!unlockDraft.password || busy} className="bg-slate-800 hover:bg-slate-700 disabled:opacity-50 border border-slate-600 rounded px-3 py-2 text-sm">Unlock Draft</button>
+                    </>
+                  )}
+                </div>
               )}
             </section>
           )}

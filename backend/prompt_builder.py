@@ -109,6 +109,52 @@ def _render_conditions(state: CampaignState) -> str:
     )
 
 
+def _render_preference_context(state: CampaignState) -> str:
+    ctx = state.preference_context
+    if not ctx.enabled:
+        return ""
+
+    lines = [
+        ctx.safety_principle,
+        "Use these as fictional roleplay boundaries and tone guidance only.",
+        "Never treat fantasy interest as real-world consent.",
+        "Do not add explicit or graphic detail; use fade-to-black when requested.",
+    ]
+    if ctx.source:
+        lines.append(f"Source: {ctx.source}")
+    if ctx.profile_id:
+        version = f" v{ctx.profile_version}" if ctx.profile_version is not None else ""
+        lines.append(f"Profile: {ctx.profile_id}{version}")
+    if ctx.draft_id:
+        lines.append(f"Saved fantasy draft: {ctx.draft_title or ctx.draft_id} ({ctx.draft_id})")
+
+    global_context = {
+        k: v for k, v in ctx.global_context.items()
+        if k in {"gender", "orientation", "relationshipStyle", "preferredPOV", "fadeToBlack", "consentStyle"} and v not in ("", None)
+    }
+    if global_context:
+        lines.append("Profile context: " + "; ".join(f"{k}: {v}" for k, v in global_context.items()))
+
+    selected = ctx.selected_themes[:8]
+    if selected:
+        lines.append("Selected themes:")
+        for theme in selected:
+            label = theme.get("label") or theme.get("id") or "Unnamed theme"
+            bits = []
+            for key in ("fantasyInterest", "textRoleplayWillingness", "realWorldWillingness", "intensityPreference", "giverReceiverRole"):
+                value = theme.get(key)
+                if value not in ("", None):
+                    bits.append(f"{key}: {value}")
+            lines.append(f"- {label}" + (f" ({'; '.join(bits)})" if bits else ""))
+
+    if ctx.fantasy_only_theme_ids:
+        lines.append("Fantasy-only theme ids: " + ", ".join(ctx.fantasy_only_theme_ids[:12]))
+    if ctx.real_world_hard_no_theme_ids:
+        lines.append("Real-world hard-no theme ids: " + ", ".join(ctx.real_world_hard_no_theme_ids[:12]))
+
+    return "\n".join(lines)
+
+
 def _render_memories(memories: list[dict]) -> str:
     if not memories:
         return ""
@@ -222,6 +268,13 @@ def _build_system_prompt(
         s = _section("ACTIVE CONDITIONS", conditions)
         parts.append(s)
         tokens.conditions = count_tokens(s)
+
+    preferences = _render_preference_context(state)
+    if preferences:
+        preferences = _truncate_to_tokens(preferences, 900)
+        s = _section("PREFERENCE GUIDANCE (fictional boundaries)", preferences)
+        parts.append(s)
+        tokens.preferences = count_tokens(s)
 
     if turn_context.strip():
         s = _section("ACTION RESOLUTION (binding)", turn_context.strip())

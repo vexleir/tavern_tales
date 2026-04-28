@@ -172,6 +172,18 @@ async def load_profile(profile_id: str) -> UserPreferenceProfile | None:
         raise RuntimeError(f"Preference profile {profile_id!r} could not be read: {e}") from e
 
 
+async def delete_profile(profile_id: str) -> bool:
+    _ensure_dirs()
+    async with profile_lock(profile_id):
+        profile = await load_profile(profile_id)
+        if profile is None:
+            return False
+        profile.status = ProfileStatus.DELETED
+        profile.updatedAt = now_iso()
+        _atomic_write(_profile_path(profile.profileId), encrypt_json(profile.model_dump(mode="json")))
+        return True
+
+
 async def list_profiles(include_archived: bool = False) -> list[PreferenceProfileSummary]:
     _ensure_dirs()
     summaries: list[PreferenceProfileSummary] = []
@@ -190,6 +202,8 @@ async def list_profiles(include_archived: bool = False) -> list[PreferenceProfil
             log.warning("Skipping unreadable preference profile %s: %s", entry.name, e)
             continue
         if profile is None:
+            continue
+        if profile.status == ProfileStatus.DELETED:
             continue
         if profile.status == ProfileStatus.ARCHIVED and not include_archived:
             continue

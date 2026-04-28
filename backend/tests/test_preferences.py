@@ -1,28 +1,35 @@
 from __future__ import annotations
 
 import json
+from pathlib import Path
+from uuid import uuid4
 
 import pytest
 from fastapi.testclient import TestClient
 
+BACKEND_DIR = Path(__file__).resolve().parent.parent
+
 
 @pytest.fixture
-def temp_preference_dirs(tmp_path, monkeypatch):
+def temp_preference_dirs(monkeypatch):
     import preference_store
     import secure_storage
 
-    monkeypatch.setattr(preference_store, "PREFERENCES_DIR", tmp_path / "preferences")
-    monkeypatch.setattr(preference_store, "FANTASIES_DIR", tmp_path / "fantasies")
+    root = BACKEND_DIR / f"pytest-cache-files-prefs-{uuid4().hex}"
+    root.mkdir(parents=True, exist_ok=False)
+    monkeypatch.setattr(preference_store, "PREFERENCES_DIR", root / "preferences")
+    monkeypatch.setattr(preference_store, "FANTASIES_DIR", root / "fantasies")
     monkeypatch.setattr(preference_store, "_profile_locks", {})
     monkeypatch.setattr(preference_store, "_fantasy_locks", {})
-    monkeypatch.setattr(secure_storage, "SECURE_DIR", tmp_path / "secure")
-    monkeypatch.setattr(secure_storage, "KEY_FILE", tmp_path / "secure" / "local.key")
-    return tmp_path
+    monkeypatch.setattr(secure_storage, "SECURE_DIR", root / "secure")
+    monkeypatch.setattr(secure_storage, "KEY_FILE", root / "secure" / "local.key")
+    return root
 
 
 def _mark_first_item(profile, *, private_note: str = "private note"):
     from preference_schema import (
         FantasyInterest,
+        GiverReceiverRole,
         PartnerSharePermission,
         RealWorldWillingness,
         TextRoleplayWillingness,
@@ -32,6 +39,7 @@ def _mark_first_item(profile, *, private_note: str = "private note"):
     item.fantasyInterest = FantasyInterest.FAVORITE
     item.textRoleplayWillingness = TextRoleplayWillingness.YES
     item.realWorldWillingness = RealWorldWillingness.HARD_NO
+    item.giverReceiverRole = GiverReceiverRole.BOTH
     item.partnerSharePermission = PartnerSharePermission.SUMMARY
     item.commentsPrivate = private_note
     item.commentsShareable = "shareable note"
@@ -56,6 +64,7 @@ async def test_preference_profiles_are_encrypted_at_rest(temp_preference_dirs):
     assert loaded is not None
     assert loaded.displayName == "Alex"
     assert loaded.categories[0].items[0].commentsPrivate == "keep this private"
+    assert loaded.categories[0].items[0].giverReceiverRole == "both"
 
 
 def test_redaction_omits_private_notes_and_reality_bridge(temp_preference_dirs):
@@ -119,7 +128,7 @@ async def test_existing_profiles_receive_new_default_items(temp_preference_dirs)
 def test_matching_keeps_fantasy_and_real_world_boundaries_separate(temp_preference_dirs):
     import preference_logic
     import preference_store
-    from preference_schema import PartnerSharePermission, RealWorldWillingness, TextRoleplayWillingness
+    from preference_schema import GiverReceiverRole, PartnerSharePermission, RealWorldWillingness, TextRoleplayWillingness
 
     first = preference_store.new_profile("First")
     second = preference_store.new_profile("Second")
@@ -128,13 +137,36 @@ def test_matching_keeps_fantasy_and_real_world_boundaries_separate(temp_preferen
     b.fantasyInterest = a.fantasyInterest
     b.textRoleplayWillingness = TextRoleplayWillingness.YES
     b.realWorldWillingness = RealWorldWillingness.YES
+    b.giverReceiverRole = GiverReceiverRole.RECEIVER
     b.partnerSharePermission = PartnerSharePermission.FULL
 
     result = preference_logic.compare_profiles(first, second)
     assert result["safetyPrinciple"] == "Fantasy interest is not real-world consent."
     assert result["matches"][0]["realWorldWillingness"] == "hard_no"
+    assert result["matches"][0]["giverReceiverRole"] == "receiver"
     assert result["matches"][0]["partnerSharePermission"] == "summary"
     assert a.id in result["realityBridgeExcludedThemeIds"]
+
+
+def test_matching_blocks_same_non_flexible_giver_receiver_roles(temp_preference_dirs):
+    import preference_logic
+    import preference_store
+    from preference_schema import GiverReceiverRole, PartnerSharePermission, RealWorldWillingness, TextRoleplayWillingness
+
+    first = preference_store.new_profile("First")
+    second = preference_store.new_profile("Second")
+    a = _mark_first_item(first)
+    a.giverReceiverRole = GiverReceiverRole.GIVER
+    b = second.categories[0].items[0]
+    b.fantasyInterest = a.fantasyInterest
+    b.textRoleplayWillingness = TextRoleplayWillingness.YES
+    b.realWorldWillingness = RealWorldWillingness.DISCUSS_ONLY
+    b.giverReceiverRole = GiverReceiverRole.GIVER
+    b.partnerSharePermission = PartnerSharePermission.SUMMARY
+
+    result = preference_logic.compare_profiles(first, second)
+    assert result["matches"] == []
+    assert "giver_receiver_not_complementary" in result["blocked"][0]["reasons"]
 
 
 def test_random_fantasy_uses_profile_context_and_creates_campaign_seed(temp_preference_dirs):
@@ -151,8 +183,10 @@ def test_random_fantasy_uses_profile_context_and_creates_campaign_seed(temp_pref
     assert fantasy.createdFromProfileVersion == profile.profileVersion
     assert "Fantasy interest is not real-world consent" in fantasy.seedPrompt
     assert "gender: woman" in fantasy.seedPrompt
+    assert "Giver/receiver preferences" in fantasy.seedPrompt
     assert fantasy.campaignSeed.lorebook["FantasyBoundary"]
     assert fantasy.preferenceSnapshot.selectedThemes
+    assert fantasy.preferenceSnapshot.selectedThemes[0]["giverReceiverRole"] == "both"
 
 
 @pytest.mark.asyncio
@@ -197,15 +231,54 @@ def test_preference_api_create_export_and_random_fantasy(temp_preference_dirs):
     # Save once with an eligible item so random generation has profile data.
     created["categories"][0]["items"][0]["fantasyInterest"] = "favorite"
     created["categories"][0]["items"][0]["textRoleplayWillingness"] = "yes"
+    created["categories"][0]["items"][0]["giverReceiverRole"] = "giver"
     r = c.put(f"/api/preference-profiles/{profile_id}", json=created)
     assert r.status_code == 200
 
     random_fantasy = c.post(f"/api/preference-profiles/{profile_id}/random-fantasy", json={"save": True}).json()
     assert random_fantasy["ownerProfileId"] == profile_id
     assert random_fantasy["campaignSeed"]["selectedThemeIds"]
+    assert random_fantasy["preferenceSnapshot"]["selectedThemes"][0]["giverReceiverRole"] == "giver"
+
+    random_fantasy["title"] = "Edited preference draft"
+    random_fantasy["content"] = "edited draft body"
+    updated = c.put(f"/api/fantasies/{random_fantasy['id']}", json={"fantasy": random_fantasy}).json()
+    assert updated["title"] == "Edited preference draft"
+    assert updated["content"] == "edited draft body"
+
+    protected = c.post(
+        f"/api/fantasies/{random_fantasy['id']}/protect",
+        json={"password": "correct horse battery staple", "hint": "long phrase"},
+    ).json()
+    assert protected["passwordProtection"]["enabled"] is True
+    assert protected["content"] == ""
+    assert protected["synopsis"] == ""
+
+    unlocked = c.post(
+        f"/api/fantasies/{random_fantasy['id']}/unlock",
+        json={"password": "correct horse battery staple"},
+    ).json()
+    unlocked["content"] = "edited protected draft body"
+    saved_locked = c.put(
+        f"/api/fantasies/{random_fantasy['id']}",
+        json={"fantasy": unlocked, "password": "correct horse battery staple"},
+    ).json()
+    assert saved_locked["content"] == ""
+    assert saved_locked["locked"] is True
+    unlocked_again = c.post(
+        f"/api/fantasies/{random_fantasy['id']}/unlock",
+        json={"password": "correct horse battery staple"},
+    ).json()
+    assert unlocked_again["content"] == "edited protected draft body"
 
     listed = c.get(f"/api/fantasies?profile_id={profile_id}").json()
     assert listed[0]["id"] == random_fantasy["id"]
+
+    deleted = c.delete(f"/api/preference-profiles/{profile_id}")
+    assert deleted.status_code == 200
+    assert deleted.json()["status"] == "success"
+    assert c.get(f"/api/preference-profiles/{profile_id}").status_code == 404
+    assert all(summary["profileId"] != profile_id for summary in c.get("/api/preference-profiles").json())
 
 
 def test_local_dev_cors_allows_vite_alternate_port():
@@ -222,3 +295,40 @@ def test_local_dev_cors_allows_vite_alternate_port():
     )
     assert r.status_code == 200
     assert r.headers["access-control-allow-origin"] == "http://127.0.0.1:5174"
+
+
+def test_campaign_init_persists_preference_context(temp_preference_dirs, monkeypatch):
+    import main
+    import state_manager
+
+    state_root = BACKEND_DIR / f"pytest-cache-files-state-{uuid4().hex}"
+    state_root.mkdir(parents=True, exist_ok=False)
+    monkeypatch.setattr(state_manager, "STATES_DIR", state_root / "states")
+    monkeypatch.setattr(state_manager, "LEGACY_FILE", state_root / "campaign_states.json")
+    monkeypatch.setattr(state_manager, "_migration_checked", False)
+    monkeypatch.setattr(state_manager, "_locks", {})
+    monkeypatch.setattr(state_manager, "_turn_locks", {})
+    (state_root / "states").mkdir(parents=True, exist_ok=True)
+
+    c = TestClient(main.app)
+    payload = {
+        "campaign_id": "campaign_pref_context",
+        "player_name": "Traveler",
+        "starting_location": "The Ember & Ash Tavern",
+        "stats": {"Health": 100},
+        "preference_context": {
+            "enabled": True,
+            "source": "saved_fantasy",
+            "profile_id": "profile_abc",
+            "profile_version": 4,
+            "draft_id": "fantasy_123",
+            "selected_themes": [{"id": "tone_trust", "label": "Trust", "commentsPrivate": "omit me"}],
+            "global_context": {"gender": "woman", "privateSecret": "omit me"},
+        },
+    }
+    r = c.post("/api/campaign/init", json=payload)
+    assert r.status_code == 200
+    state = c.get("/api/state/campaign_pref_context").json()
+    assert state["preference_context"]["enabled"] is True
+    assert state["preference_context"]["profile_id"] == "profile_abc"
+    assert state["preference_context"]["selected_themes"][0]["label"] == "Trust"

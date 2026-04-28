@@ -54,7 +54,7 @@ from schema import (
     SamplingOverrides,
     StatBound,
 )
-from secure_storage import SecureStorageError
+from secure_storage import SecureStorageError, password_encrypt_text
 
 configure_logging()
 log = logging.getLogger(__name__)
@@ -144,6 +144,7 @@ class InitCampaignRequest(BaseModel):
     story_summary: str = ""
     world_description: str = ""
     starting_scene: str = ""
+    preference_context: dict[str, Any] = Field(default_factory=dict)
     gm_model: str = "llama3"
     utility_model: str | None = None
     nsfw_world_gen: bool = False
@@ -203,6 +204,7 @@ class UnlockFantasyRequest(BaseModel):
 
 class SaveFantasyRequest(BaseModel):
     fantasy: dict[str, Any]
+    password: str | None = Field(default=None, min_length=1, max_length=512)
 
 
 # ---------------------------------------------------------------------------
@@ -264,7 +266,7 @@ async def create_preference_profile(req: CreatePreferenceProfileRequest):
 async def get_preference_profile(profile_id: str, include_private: bool = True):
     try:
         profile = await preference_store.load_profile(profile_id)
-        if profile is None:
+        if profile is None or profile.status.value == "deleted":
             raise HTTPException(404, "preference profile not found")
         return preference_logic.redact_profile(profile, include_private=include_private)
     except HTTPException:
@@ -276,10 +278,28 @@ async def get_preference_profile(profile_id: str, include_private: bool = True):
 @app.put("/api/preference-profiles/{profile_id}")
 async def update_preference_profile(profile_id: str, body: dict[str, Any]):
     try:
+        existing = await preference_store.load_profile(profile_id)
+        if existing is not None and existing.status.value == "deleted":
+            raise HTTPException(404, "preference profile not found")
         body["profileId"] = profile_id
         profile = UserPreferenceProfile.model_validate(body)
         saved = await preference_store.save_profile(profile, bump_version=True)
         return preference_logic.redact_profile(saved, include_private=True)
+    except HTTPException:
+        raise
+    except Exception as e:  # noqa: BLE001
+        raise _sensitive_storage_http_error(e)
+
+
+@app.delete("/api/preference-profiles/{profile_id}")
+async def delete_preference_profile(profile_id: str):
+    try:
+        deleted = await preference_store.delete_profile(profile_id)
+        if not deleted:
+            raise HTTPException(404, "preference profile not found")
+        return {"status": "success", "profileId": profile_id}
+    except HTTPException:
+        raise
     except Exception as e:  # noqa: BLE001
         raise _sensitive_storage_http_error(e)
 
@@ -288,7 +308,7 @@ async def update_preference_profile(profile_id: str, body: dict[str, Any]):
 async def export_preference_profile(profile_id: str, include_private: bool = False):
     try:
         profile = await preference_store.load_profile(profile_id)
-        if profile is None:
+        if profile is None or profile.status.value == "deleted":
             raise HTTPException(404, "preference profile not found")
         payload = preference_logic.redact_profile(profile, include_private=include_private)
         suffix = "private" if include_private else "redacted"
@@ -315,7 +335,7 @@ async def import_preference_profile(req: ImportPreferenceProfileRequest):
 async def create_random_preference_fantasy(profile_id: str, req: RandomFantasyRequest):
     try:
         profile = await preference_store.load_profile(profile_id)
-        if profile is None:
+        if profile is None or profile.status.value == "deleted":
             raise HTTPException(404, "preference profile not found")
         fantasy = preference_logic.build_random_fantasy(
             profile,
@@ -337,7 +357,7 @@ async def compare_preference_profiles(req: CompareProfilesRequest):
     try:
         first = await preference_store.load_profile(req.firstProfileId)
         second = await preference_store.load_profile(req.secondProfileId)
-        if first is None or second is None:
+        if first is None or second is None or first.status.value == "deleted" or second.status.value == "deleted":
             raise HTTPException(404, "one or more preference profiles were not found")
         return preference_logic.compare_profiles(first, second, context=req.context)
     except HTTPException:
@@ -360,6 +380,30 @@ async def save_generated_fantasy(req: SaveFantasyRequest):
         fantasy = GeneratedFantasy.model_validate(req.fantasy)
         saved = await preference_store.save_fantasy(fantasy)
         return preference_logic.redact_fantasy(saved, include_private=True)
+    except Exception as e:  # noqa: BLE001
+        raise _sensitive_storage_http_error(e)
+
+
+@app.put("/api/fantasies/{fantasy_id}")
+async def update_saved_fantasy(fantasy_id: str, req: SaveFantasyRequest):
+    try:
+        existing = await preference_store.load_fantasy(fantasy_id)
+        if existing is None:
+            raise HTTPException(404, "fantasy not found")
+        fantasy = GeneratedFantasy.model_validate(req.fantasy)
+        fantasy.id = fantasy_id
+        if existing.passwordProtection.enabled:
+            fantasy.passwordProtection = existing.passwordProtection
+            if req.password:
+                preference_store.unlock_fantasy_content(existing, req.password)
+                fantasy.protectedContent = password_encrypt_text(fantasy.content, req.password)
+            else:
+                fantasy.protectedContent = existing.protectedContent
+            fantasy.content = ""
+        saved = await preference_store.save_fantasy(fantasy)
+        return preference_logic.redact_fantasy(saved, include_private=True)
+    except HTTPException:
+        raise
     except Exception as e:  # noqa: BLE001
         raise _sensitive_storage_http_error(e)
 
@@ -447,6 +491,7 @@ async def init_campaign(req: InitCampaignRequest):
         lorebook=dict(req.lorebook),
         world_description=req.world_description,
         starting_scene=req.starting_scene,
+        preference_context=req.preference_context,
         stat_bounds=stat_bounds,
     )
     if req.story_summary:

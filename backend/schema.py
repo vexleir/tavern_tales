@@ -167,6 +167,26 @@ class MessageSideEffects(BaseModel):
     error: str = ""
 
 
+class CampaignPreferenceContext(BaseModel):
+    """Redacted preference metadata attached to a campaign.
+
+    This is prompt-safe guidance only. It must not contain private comments,
+    password-protected fantasy content, or reality-bridge private fields.
+    """
+
+    enabled: bool = False
+    source: str = ""  # saved_fantasy, profile, comparison, etc.
+    profile_id: str = ""
+    profile_version: int | None = None
+    draft_id: str = ""
+    draft_title: str = ""
+    selected_themes: list[dict[str, Any]] = Field(default_factory=list)
+    fantasy_only_theme_ids: list[str] = Field(default_factory=list)
+    real_world_hard_no_theme_ids: list[str] = Field(default_factory=list)
+    global_context: dict[str, Any] = Field(default_factory=dict)
+    safety_principle: str = "Fantasy interest is not real-world consent."
+
+
 # ---------------------------------------------------------------------------
 # Top-level state
 # ---------------------------------------------------------------------------
@@ -192,6 +212,7 @@ class CampaignState(BaseModel):
     rules: RulesConfig = Field(default_factory=RulesConfig)
     quests: list[Quest] = Field(default_factory=list)
     conditions: list[Condition] = Field(default_factory=list)
+    preference_context: CampaignPreferenceContext = Field(default_factory=CampaignPreferenceContext)
 
     messages: list[Message] = Field(default_factory=list)
     summaries: Summaries = Field(default_factory=Summaries)
@@ -253,6 +274,7 @@ class BlockTokens(BaseModel):
     action_resolution: int = 0
     quests: int = 0
     conditions: int = 0
+    preferences: int = 0
     memories: int = 0
 
 

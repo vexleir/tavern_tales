@@ -1,14 +1,61 @@
 import { useEffect, useState } from 'react';
 import { apiFetch, describeApiError, parseErrorResponse } from './lib/api';
 
-export default function CampaignCreator({ campaignId, onComplete }) {
-  const [protagonist, setProtagonist] = useState({
-    name: 'Traveler',
-    location: 'The Ember & Ash Tavern',
-    gender: 'Unspecified',
-    appearance: '',
-    description: ''
-  });
+function buildInitialSetup(draft) {
+  const seed = draft?.campaignSeed || {};
+  const globalContext = draft?.preferenceSnapshot?.globalContext || {};
+  const seedLorebook = seed.lorebook && typeof seed.lorebook === 'object'
+    ? Object.entries(seed.lorebook).map(([keyword, rule]) => ({ keyword, rule: String(rule) }))
+    : [];
+  return {
+    protagonist: {
+      name: 'Traveler',
+      location: 'The Ember & Ash Tavern',
+      gender: globalContext.gender || 'Unspecified',
+      appearance: '',
+      description: draft ? [
+        globalContext.orientation ? `Orientation: ${globalContext.orientation}` : '',
+        globalContext.relationshipStyle ? `Relationship style: ${globalContext.relationshipStyle}` : '',
+        seed.protagonistGuidance
+      ].filter(Boolean).join('\n') : ''
+    },
+    worldPrompt: draft?.seedPrompt || '',
+    storySummary: draft?.synopsis || draft?.title || '',
+    worldDescription: draft ? [
+      seed.worldConcept,
+      draft.synopsis,
+      draft.content
+    ].filter(Boolean).join('\n\n') : '',
+    startingScene: seed.startingScene || draft?.synopsis || '',
+    lorebook: draft ? [
+      ...seedLorebook,
+      { keyword: 'SavedFantasyDraft', rule: `Campaign setup was seeded from saved fantasy draft ${draft.id} at profile version ${draft.createdFromProfileVersion}.` },
+      { keyword: 'ConsentBoundary', rule: 'Fantasy preference data guides fictional roleplay only and must not be treated as real-world consent.' }
+    ] : []
+  };
+}
+
+function buildPreferenceContext(draft) {
+  if (!draft?.preferenceSnapshot) return {};
+  const snapshot = draft.preferenceSnapshot;
+  return {
+    enabled: true,
+    source: 'saved_fantasy',
+    profile_id: snapshot.profileId || draft.ownerProfileId || '',
+    profile_version: snapshot.profileVersion ?? draft.createdFromProfileVersion ?? null,
+    draft_id: draft.id || '',
+    draft_title: draft.title || '',
+    selected_themes: snapshot.selectedThemes || [],
+    fantasy_only_theme_ids: snapshot.fantasyOnlyThemeIds || [],
+    real_world_hard_no_theme_ids: snapshot.realWorldHardNoThemeIds || [],
+    global_context: snapshot.globalContext || {},
+    safety_principle: 'Fantasy interest is not real-world consent.'
+  };
+}
+
+export default function CampaignCreator({ campaignId, initialFantasyDraft, onComplete }) {
+  const initialSetup = useState(() => buildInitialSetup(initialFantasyDraft))[0];
+  const [protagonist, setProtagonist] = useState(initialSetup.protagonist);
 
   const [stats, setStats] = useState([{ name: 'Health', value: 100 }, { name: 'Gold', value: 50 }]);
   const [newStat, setNewStat] = useState({ name: '', value: 10 });
@@ -16,7 +63,7 @@ export default function CampaignCreator({ campaignId, onComplete }) {
   const [inventory, setInventory] = useState(['Rusty Sword']);
   const [newItem, setNewItem] = useState('');
 
-  const [lorebook, setLorebook] = useState([]);
+  const [lorebook, setLorebook] = useState(initialSetup.lorebook);
   const [newLore, setNewLore] = useState({ keyword: '', rule: '' });
 
   const [npcs, setNpcs] = useState([]);
@@ -29,17 +76,16 @@ export default function CampaignCreator({ campaignId, onComplete }) {
     secret: ''
   });
 
-  const [worldPrompt, setWorldPrompt] = useState('');
+  const [worldPrompt, setWorldPrompt] = useState(initialSetup.worldPrompt);
   const [isGenerating, setIsGenerating] = useState(false);
-  const [storySummary, setStorySummary] = useState('');
-  const [worldDescription, setWorldDescription] = useState('');
-  const [startingScene, setStartingScene] = useState('');
+  const [storySummary, setStorySummary] = useState(initialSetup.storySummary);
+  const [worldDescription, setWorldDescription] = useState(initialSetup.worldDescription);
+  const [startingScene, setStartingScene] = useState(initialSetup.startingScene);
 
   // Model configuration (A11)
   const [availableModels, setAvailableModels] = useState([]);
   const [gmModel, setGmModel] = useState('');
   const [utilityModel, setUtilityModel] = useState('');
-  const [nsfwWorldGen, setNsfwWorldGen] = useState(false);
   const [submitError, setSubmitError] = useState('');
 
   useEffect(() => {
@@ -87,7 +133,7 @@ export default function CampaignCreator({ campaignId, onComplete }) {
           headers: {'Content-Type':'application/json'},
           body: JSON.stringify({
              prompt: worldPrompt,
-             nsfw: nsfwWorldGen,
+             nsfw: false,
              gm_model: gmModel || null,
              utility_model: utilityModel || null
           })
@@ -168,9 +214,10 @@ export default function CampaignCreator({ campaignId, onComplete }) {
         story_summary: storySummary,
         world_description: worldDescription,
         starting_scene: startingScene,
+        preference_context: buildPreferenceContext(initialFantasyDraft),
         gm_model: gmModel,
         utility_model: utilityModel || null,
-        nsfw_world_gen: nsfwWorldGen
+        nsfw_world_gen: false
       };
 
       const res = await apiFetch('/api/campaign/init', {
@@ -205,6 +252,14 @@ export default function CampaignCreator({ campaignId, onComplete }) {
           </div>
         )}
 
+        {initialFantasyDraft && (
+          <section className="bg-emerald-950/30 border border-emerald-800 rounded-lg p-4 text-sm text-emerald-100">
+            <div className="font-bold text-emerald-300">Loaded from saved fantasy draft</div>
+            <div className="text-emerald-200/80 mt-1">{initialFantasyDraft.title}</div>
+            <div className="text-xs text-emerald-300/70 mt-2">Fantasy preferences seed the campaign setup, but they are not real-world consent.</div>
+          </section>
+        )}
+
         {/* Model configuration (A11) */}
         <section className="bg-fantasy-panel/40 border border-slate-700/50 rounded-xl p-6 shadow-md backdrop-blur">
           <h2 className="text-xl font-serif text-amber-500 mb-4 border-b border-slate-700/50 pb-2">Models</h2>
@@ -226,10 +281,6 @@ export default function CampaignCreator({ campaignId, onComplete }) {
               <p className="text-xs text-slate-500 mt-1 italic">Small instruct model recommended.</p>
             </div>
           </div>
-          <label className="mt-4 flex items-center gap-2 text-sm text-slate-300 cursor-pointer select-none">
-            <input type="checkbox" checked={nsfwWorldGen} onChange={e=>setNsfwWorldGen(e.target.checked)} className="accent-amber-500" />
-            Use uncensored creative model for world generation (NSFW)
-          </label>
         </section>
 
         {/* World Generation */}

@@ -28,6 +28,7 @@ function AppInner() {
   const [newLoreRule, setNewLoreRule] = useState('');
   const [renamingId, setRenamingId] = useState(null);
   const [renameDraft, setRenameDraft] = useState('');
+  const [pendingFantasyDraft, setPendingFantasyDraft] = useState(null);
 
   const modal = useModal();
   const banner = useBanner();
@@ -477,7 +478,7 @@ function AppInner() {
         <h1 className="text-6xl text-fantasy-accent drop-shadow-md mb-12 border-b border-slate-700 pb-4">Tavern Tales Reborn</h1>
         <div className="bg-fantasy-panel/40 border border-slate-700/50 rounded-xl shadow-lg backdrop-blur p-8 w-full max-w-2xl text-center">
           <button
-            onClick={() => { setActiveCampaignId(createCampaignId()); setAppMode('setup'); }}
+            onClick={() => { setPendingFantasyDraft(null); setActiveCampaignId(createCampaignId()); setAppMode('setup'); }}
             className="bg-indigo-700 hover:bg-indigo-600 text-white w-full py-4 rounded-lg font-sans font-bold tracking-widest text-lg uppercase transition shadow-md mb-4"
           >+ Forge New World</button>
 
@@ -541,11 +542,18 @@ function AppInner() {
   }
 
   if (appMode === 'setup') {
-    return <CampaignCreator campaignId={activeCampaignId} onComplete={async () => { await loadCampaign(activeCampaignId); }} />;
+    return <CampaignCreator campaignId={activeCampaignId} initialFantasyDraft={pendingFantasyDraft} onComplete={async () => { setPendingFantasyDraft(null); await loadCampaign(activeCampaignId); }} />;
   }
 
   if (appMode === 'profiles') {
-    return <PreferenceProfiles onBack={() => setAppMode('menu')} />;
+    return <PreferenceProfiles
+      onBack={() => setAppMode('menu')}
+      onCreateCampaignFromDraft={(draft) => {
+        setPendingFantasyDraft(draft);
+        setActiveCampaignId(createCampaignId());
+        setAppMode('setup');
+      }}
+    />;
   }
 
   const ctx = promptStats ? Math.round((promptStats.total_used / promptStats.model_context_window) * 100) : 0;
@@ -573,6 +581,18 @@ function AppInner() {
 
         {campaignState && (
           <>
+            {campaignState.preference_context?.enabled && (
+              <div className="bg-emerald-950/20 border border-emerald-800/60 rounded p-3 text-xs text-emerald-100">
+                <h3 className="uppercase text-emerald-300 font-bold tracking-widest mb-2">Preference Context</h3>
+                <div className="text-emerald-200 font-semibold">{campaignState.preference_context.draft_title || 'Saved preference snapshot'}</div>
+                <div className="text-emerald-300/70 mt-1">
+                  Profile {campaignState.preference_context.profile_version ? `v${campaignState.preference_context.profile_version}` : 'snapshot'}
+                  {campaignState.preference_context.draft_id ? ` / ${campaignState.preference_context.draft_id}` : ''}
+                </div>
+                <div className="mt-2 text-emerald-200/80">{campaignState.preference_context.safety_principle}</div>
+              </div>
+            )}
+
             <div>
               <h3 className="text-xs uppercase text-fantasy-dim font-bold tracking-widest mb-3 border-b border-slate-700 pb-1">
                 Protagonist {directorMode && <span className="text-amber-500 lowercase opacity-80">(edit mode)</span>}

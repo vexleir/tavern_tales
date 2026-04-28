@@ -17,6 +17,7 @@ from schema import (
     ModelConfig,
     NPC,
     Player,
+    CampaignPreferenceContext,
     Role,
 )
 
@@ -173,3 +174,47 @@ def test_large_lorebook_is_truncated():
     assert "LOREBOOK" in built.system_prompt
     assert "truncated to fit prompt budget" in built.system_prompt
     assert built.stats.total_used <= built.stats.model_context_window
+
+
+def test_preference_context_is_rendered_as_safe_guidance():
+    s = _rich_state()
+    s.preference_context = CampaignPreferenceContext(
+        enabled=True,
+        source="saved_fantasy",
+        profile_id="profile_abc",
+        profile_version=3,
+        draft_id="fantasy_123",
+        draft_title="Boundaries Draft",
+        selected_themes=[
+            {
+                "id": "power_submission",
+                "label": "Power exchange",
+                "fantasyInterest": "favorite",
+                "textRoleplayWillingness": "yes",
+                "realWorldWillingness": "hard_no",
+                "intensityPreference": "moderate",
+                "giverReceiverRole": "receiver",
+                "commentsPrivate": "never prompt this",
+            }
+        ],
+        fantasy_only_theme_ids=["power_submission"],
+        real_world_hard_no_theme_ids=["power_submission"],
+        global_context={
+            "gender": "woman",
+            "orientation": "bi",
+            "relationshipStyle": "partnered",
+            "privateSecret": "do not include",
+        },
+    )
+
+    built = build_prompt(s, user_message="x")
+    sp = built.system_prompt
+    assert "PREFERENCE GUIDANCE" in sp
+    assert "Fantasy interest is not real-world consent" in sp
+    assert "Power exchange" in sp
+    assert "realWorldWillingness: hard_no" in sp
+    assert "Fantasy-only theme ids: power_submission" in sp
+    assert "Real-world hard-no theme ids: power_submission" in sp
+    assert "privateSecret" not in sp
+    assert "never prompt this" not in sp
+    assert built.stats.blocks.preferences > 0

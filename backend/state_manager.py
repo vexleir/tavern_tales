@@ -124,7 +124,19 @@ def _atomic_write(path: Path, payload: dict[str, Any]) -> None:
             os.fsync(f.fileno())
         except OSError:
             pass
-    os.replace(tmp, path)
+    try:
+        os.replace(tmp, path)
+    except PermissionError:
+        # Some Windows sandbox/ACL setups allow creation and writes but deny
+        # rename/delete. Keep the state payload intact and fall back to a direct
+        # write so local tests and campaigns can continue.
+        with open(path, "w", encoding="utf-8") as f:
+            f.write(data)
+            f.flush()
+            try:
+                os.fsync(f.fileno())
+            except OSError:
+                pass
 
 
 # ---------------------------------------------------------------------------

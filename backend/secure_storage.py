@@ -71,10 +71,11 @@ def _read_or_create_local_key() -> bytes:
 
     key = Fernet.generate_key()  # type: ignore[union-attr]
     KEY_FILE.write_bytes(key)
-    try:
-        os.chmod(KEY_FILE, 0o600)
-    except OSError:
-        pass
+    if os.name != "nt":
+        try:
+            os.chmod(KEY_FILE, 0o600)
+        except OSError:
+            pass
     return key
 
 

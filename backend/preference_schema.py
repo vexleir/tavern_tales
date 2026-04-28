@@ -53,6 +53,12 @@ class IntensityPreference(str, Enum):
     INTENSE = "intense"
 
 
+class GiverReceiverRole(str, Enum):
+    GIVER = "giver"
+    RECEIVER = "receiver"
+    BOTH = "both"
+
+
 class ContextType(str, Enum):
     AI = "ai"
     PARTNER = "partner"
@@ -121,6 +127,7 @@ class SharingMode(str, Enum):
 class ProfileStatus(str, Enum):
     ACTIVE = "active"
     ARCHIVED = "archived"
+    DELETED = "deleted"
 
 
 class GlobalPreferences(BaseModel):
@@ -143,6 +150,7 @@ class PreferenceItem(BaseModel):
     realWorldWillingness: RealWorldWillingness = RealWorldWillingness.HARD_NO
     textRoleplayWillingness: TextRoleplayWillingness = TextRoleplayWillingness.NO
     intensityPreference: IntensityPreference = IntensityPreference.LIGHT
+    giverReceiverRole: GiverReceiverRole = GiverReceiverRole.BOTH
     context: list[ContextType] = Field(default_factory=lambda: [ContextType.AI])
     fantasyOnly: bool = True
     partnerSharePermission: PartnerSharePermission = PartnerSharePermission.PRIVATE
@@ -170,6 +178,7 @@ class CustomPreference(BaseModel):
     fantasyInterest: FantasyInterest = FantasyInterest.NONE
     realWorldWillingness: RealWorldWillingness = RealWorldWillingness.HARD_NO
     textRoleplayWillingness: TextRoleplayWillingness = TextRoleplayWillingness.NO
+    giverReceiverRole: GiverReceiverRole = GiverReceiverRole.BOTH
     fantasyOnly: bool = True
     context: list[ContextType] = Field(default_factory=lambda: [ContextType.AI])
     partnerSharePermission: PartnerSharePermission = PartnerSharePermission.PRIVATE
