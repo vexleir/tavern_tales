@@ -38,6 +38,7 @@ from ollama_client import complete_json_detail, stream_chat
 from preference_schema import (
     ContextType,
     GeneratedFantasy,
+    IntensityPreference,
     SharingMode,
     UserPreferenceProfile,
 )
@@ -184,6 +185,11 @@ class RandomFantasyRequest(BaseModel):
     context: ContextType = ContextType.AI
     selectedCount: int = Field(default=4, ge=1, le=6)
     sharingMode: SharingMode = SharingMode.PRIVATE
+    categoryIds: list[str] = Field(default_factory=list)
+    intensity: IntensityPreference | None = None
+    favoritesOnly: bool = False
+    exploreLowerInterest: bool = False
+    includeRealityBridge: bool = False
     save: bool = True
 
 
@@ -191,6 +197,11 @@ class CompareProfilesRequest(BaseModel):
     firstProfileId: str
     secondProfileId: str
     context: ContextType = ContextType.AI
+
+
+class OverlapFantasyRequest(CompareProfilesRequest):
+    selectedCount: int = Field(default=4, ge=1, le=6)
+    save: bool = True
 
 
 class ProtectFantasyRequest(BaseModel):
@@ -204,6 +215,11 @@ class UnlockFantasyRequest(BaseModel):
 
 class SaveFantasyRequest(BaseModel):
     fantasy: dict[str, Any]
+    password: str | None = Field(default=None, min_length=1, max_length=512)
+
+
+class ExportFantasyRequest(BaseModel):
+    mode: SharingMode = SharingMode.SUMMARY_ONLY
     password: str | None = Field(default=None, min_length=1, max_length=512)
 
 
@@ -342,6 +358,11 @@ async def create_random_preference_fantasy(profile_id: str, req: RandomFantasyRe
             context=req.context,
             selected_count=req.selectedCount,
             sharing_mode=req.sharingMode,
+            category_ids=req.categoryIds,
+            intensity=req.intensity,
+            favorites_only=req.favoritesOnly,
+            explore_lower_interest=req.exploreLowerInterest,
+            include_reality_bridge=req.includeRealityBridge,
         )
         if req.save:
             fantasy = await preference_store.save_fantasy(fantasy)
@@ -360,6 +381,28 @@ async def compare_preference_profiles(req: CompareProfilesRequest):
         if first is None or second is None or first.status.value == "deleted" or second.status.value == "deleted":
             raise HTTPException(404, "one or more preference profiles were not found")
         return preference_logic.compare_profiles(first, second, context=req.context)
+    except HTTPException:
+        raise
+    except Exception as e:  # noqa: BLE001
+        raise _sensitive_storage_http_error(e)
+
+
+@app.post("/api/compatibility/overlap-fantasy")
+async def create_overlap_fantasy(req: OverlapFantasyRequest):
+    try:
+        first = await preference_store.load_profile(req.firstProfileId)
+        second = await preference_store.load_profile(req.secondProfileId)
+        if first is None or second is None or first.status.value == "deleted" or second.status.value == "deleted":
+            raise HTTPException(404, "one or more preference profiles were not found")
+        fantasy = preference_logic.build_overlap_fantasy(
+            first,
+            second,
+            context=req.context,
+            selected_count=req.selectedCount,
+        )
+        if req.save:
+            fantasy = await preference_store.save_fantasy(fantasy)
+        return preference_logic.redact_fantasy(fantasy, include_private=True)
     except HTTPException:
         raise
     except Exception as e:  # noqa: BLE001
@@ -442,6 +485,22 @@ async def unlock_saved_fantasy(fantasy_id: str, req: UnlockFantasyRequest):
             raise HTTPException(404, "fantasy not found")
         content = preference_store.unlock_fantasy_content(fantasy, req.password)
         return preference_logic.redact_fantasy(fantasy, include_private=True, unlocked_content=content)
+    except HTTPException:
+        raise
+    except Exception as e:  # noqa: BLE001
+        raise _sensitive_storage_http_error(e)
+
+
+@app.post("/api/fantasies/{fantasy_id}/export")
+async def export_saved_fantasy(fantasy_id: str, req: ExportFantasyRequest):
+    try:
+        fantasy = await preference_store.load_fantasy(fantasy_id)
+        if fantasy is None:
+            raise HTTPException(404, "fantasy not found")
+        unlocked_content = None
+        if fantasy.passwordProtection.enabled and req.password:
+            unlocked_content = preference_store.unlock_fantasy_content(fantasy, req.password)
+        return preference_logic.export_fantasy_for_sharing(fantasy, req.mode, unlocked_content=unlocked_content)
     except HTTPException:
         raise
     except Exception as e:  # noqa: BLE001

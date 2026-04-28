@@ -145,6 +145,8 @@ def test_matching_keeps_fantasy_and_real_world_boundaries_separate(temp_preferen
     assert result["matches"][0]["realWorldWillingness"] == "hard_no"
     assert result["matches"][0]["giverReceiverRole"] == "receiver"
     assert result["matches"][0]["partnerSharePermission"] == "summary"
+    assert result["matches"][0]["compatibilityNotes"]
+    assert result["matches"][0]["shareableComments"] == []
     assert a.id in result["realityBridgeExcludedThemeIds"]
 
 
@@ -167,26 +169,41 @@ def test_matching_blocks_same_non_flexible_giver_receiver_roles(temp_preference_
     result = preference_logic.compare_profiles(first, second)
     assert result["matches"] == []
     assert "giver_receiver_not_complementary" in result["blocked"][0]["reasons"]
+    assert result["blocked"][0]["first"]["giverReceiverRole"] == "giver"
 
 
 def test_random_fantasy_uses_profile_context_and_creates_campaign_seed(temp_preference_dirs):
     import preference_logic
     import preference_store
+    from preference_schema import IntensityPreference
 
     profile = preference_store.new_profile("Morgan")
     profile.globalPreferences.gender = "woman"
     profile.globalPreferences.orientation = "bi"
-    _mark_first_item(profile)
+    item = _mark_first_item(profile)
+    item.intensityPreference = IntensityPreference.MODERATE
 
-    fantasy = preference_logic.build_random_fantasy(profile)
+    fantasy = preference_logic.build_random_fantasy(
+        profile,
+        category_ids=[profile.categories[0].id],
+        intensity=IntensityPreference.MODERATE,
+        favorites_only=True,
+        include_reality_bridge=True,
+    )
     assert fantasy.ownerProfileId == profile.profileId
     assert fantasy.createdFromProfileVersion == profile.profileVersion
     assert "Fantasy interest is not real-world consent" in fantasy.seedPrompt
     assert "gender: woman" in fantasy.seedPrompt
     assert "Giver/receiver preferences" in fantasy.seedPrompt
+    assert "Category focus" in fantasy.seedPrompt
+    assert "Target intensity: moderate" in fantasy.seedPrompt
+    assert "favorites only" in fantasy.seedPrompt
     assert fantasy.campaignSeed.lorebook["FantasyBoundary"]
+    assert fantasy.campaignSeed.lorebook["GenerationControls"]
     assert fantasy.preferenceSnapshot.selectedThemes
     assert fantasy.preferenceSnapshot.selectedThemes[0]["giverReceiverRole"] == "both"
+    assert fantasy.preferenceSnapshot.selectedThemes[0]["intensityPreference"] == "moderate"
+    assert fantasy.preferenceSnapshot.realityBridgeIncluded is True
 
 
 @pytest.mark.asyncio
@@ -232,13 +249,52 @@ def test_preference_api_create_export_and_random_fantasy(temp_preference_dirs):
     created["categories"][0]["items"][0]["fantasyInterest"] = "favorite"
     created["categories"][0]["items"][0]["textRoleplayWillingness"] = "yes"
     created["categories"][0]["items"][0]["giverReceiverRole"] = "giver"
+    created["categories"][0]["items"][0]["intensityPreference"] = "moderate"
     r = c.put(f"/api/preference-profiles/{profile_id}", json=created)
     assert r.status_code == 200
+    saved_profile = r.json()
+    saved_profile["onboardingCompletedAt"] = "2026-04-28T00:00:00+00:00"
+    saved_profile["lastReviewedAt"] = "2026-04-28T00:00:00+00:00"
+    r = c.put(f"/api/preference-profiles/{profile_id}", json=saved_profile)
+    assert r.status_code == 200
+    assert r.json()["onboardingCompletedAt"] == "2026-04-28T00:00:00+00:00"
+    assert next(summary for summary in c.get("/api/preference-profiles").json() if summary["profileId"] == profile_id)["onboardingCompleted"] is True
 
-    random_fantasy = c.post(f"/api/preference-profiles/{profile_id}/random-fantasy", json={"save": True}).json()
+    random_fantasy = c.post(
+        f"/api/preference-profiles/{profile_id}/random-fantasy",
+        json={
+            "save": True,
+            "categoryIds": [created["categories"][0]["id"]],
+            "intensity": "moderate",
+            "favoritesOnly": True,
+            "includeRealityBridge": True,
+        },
+    ).json()
     assert random_fantasy["ownerProfileId"] == profile_id
     assert random_fantasy["campaignSeed"]["selectedThemeIds"]
     assert random_fantasy["preferenceSnapshot"]["selectedThemes"][0]["giverReceiverRole"] == "giver"
+    assert random_fantasy["preferenceSnapshot"]["realityBridgeIncluded"] is True
+    assert "Target intensity: moderate" in random_fantasy["seedPrompt"]
+
+    second = c.post("/api/preference-profiles", json={"displayName": "Taylor Partner"}).json()
+    second["categories"][0]["items"][0]["fantasyInterest"] = "favorite"
+    second["categories"][0]["items"][0]["textRoleplayWillingness"] = "yes"
+    second["categories"][0]["items"][0]["giverReceiverRole"] = "receiver"
+    second["categories"][0]["items"][0]["partnerSharePermission"] = "summary"
+    r = c.put(f"/api/preference-profiles/{second['profileId']}", json=second)
+    assert r.status_code == 200
+    overlap = c.post(
+        "/api/compatibility/overlap-fantasy",
+        json={
+            "firstProfileId": profile_id,
+            "secondProfileId": second["profileId"],
+            "selectedCount": 3,
+            "save": True,
+        },
+    )
+    assert overlap.status_code == 200
+    assert overlap.json()["sharingMode"] == "overlap_only"
+    assert "mutually compatible overlap" in overlap.json()["seedPrompt"]
 
     random_fantasy["title"] = "Edited preference draft"
     random_fantasy["content"] = "edited draft body"
@@ -253,6 +309,41 @@ def test_preference_api_create_export_and_random_fantasy(temp_preference_dirs):
     assert protected["passwordProtection"]["enabled"] is True
     assert protected["content"] == ""
     assert protected["synopsis"] == ""
+
+    summary_export = c.post(
+        f"/api/fantasies/{random_fantasy['id']}/export",
+        json={"mode": "summary_only"},
+    )
+    assert summary_export.status_code == 200
+    assert "content" not in summary_export.json()["fantasy"]
+
+    full_export_locked = c.post(
+        f"/api/fantasies/{random_fantasy['id']}/export",
+        json={"mode": "full_scene"},
+    )
+    assert full_export_locked.status_code == 400
+
+    full_export = c.post(
+        f"/api/fantasies/{random_fantasy['id']}/export",
+        json={"mode": "full_scene", "password": "correct horse battery staple"},
+    )
+    assert full_export.status_code == 200
+    assert full_export.json()["fantasy"]["content"] == "edited draft body"
+    assert "realityBridgeNotes" not in full_export.json()["fantasy"]
+
+    notes_export = c.post(
+        f"/api/fantasies/{random_fantasy['id']}/export",
+        json={"mode": "full_scene_with_notes", "password": "correct horse battery staple"},
+    )
+    assert notes_export.status_code == 200
+    assert "preferenceSnapshot" in notes_export.json()["fantasy"]
+
+    overlap_export = c.post(
+        f"/api/fantasies/{random_fantasy['id']}/export",
+        json={"mode": "overlap_only"},
+    )
+    assert overlap_export.status_code == 200
+    assert "content" not in overlap_export.json()["fantasy"]
 
     unlocked = c.post(
         f"/api/fantasies/{random_fantasy['id']}/unlock",

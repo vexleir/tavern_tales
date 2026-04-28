@@ -162,27 +162,59 @@ def compare_profiles(
             reality_bridge_excluded.append(item_id)
 
         if reasons:
-            blocked.append({"id": item_id, "categoryId": cat_id, "label": a.label, "reasons": reasons})
+            blocked.append({
+                "id": item_id,
+                "categoryId": cat_id,
+                "label": a.label,
+                "reasons": reasons,
+                "first": {
+                    "fantasyInterest": a.fantasyInterest.value,
+                    "textRoleplayWillingness": a.textRoleplayWillingness.value,
+                    "realWorldWillingness": a.realWorldWillingness.value,
+                    "partnerSharePermission": a.partnerSharePermission.value,
+                    "giverReceiverRole": a.giverReceiverRole.value,
+                },
+                "second": {
+                    "fantasyInterest": b.fantasyInterest.value,
+                    "textRoleplayWillingness": b.textRoleplayWillingness.value,
+                    "realWorldWillingness": b.realWorldWillingness.value,
+                    "partnerSharePermission": b.partnerSharePermission.value,
+                    "giverReceiverRole": b.giverReceiverRole.value,
+                },
+            })
             continue
+
+        lowest_intensity = _lowest_intensity(a.intensityPreference, b.intensityPreference)
+        shared_role = _shared_role(a.giverReceiverRole, b.giverReceiverRole)
+        shareable_comments = []
+        if share_permission == PartnerSharePermission.FULL:
+            if a.commentsShareable:
+                shareable_comments.append({"profileId": first.profileId, "comment": a.commentsShareable})
+            if b.commentsShareable:
+                shareable_comments.append({"profileId": second.profileId, "comment": b.commentsShareable})
 
         matches.append({
             "id": item_id,
             "categoryId": cat_id,
             "label": a.label if share_permission != PartnerSharePermission.OVERLAP_ONLY else "Shared compatible theme",
-            "fantasyInterest": lowest_interest,
+            "fantasyInterest": min(a.fantasyInterest, b.fantasyInterest, key=lambda x: FANTASY_RANK[x]).value,
             "textRoleplayWillingness": min(a.textRoleplayWillingness, b.textRoleplayWillingness, key=lambda x: TEXT_RANK[x]).value,
             "realWorldWillingness": real_world.value,
             "fantasyOnly": fantasy_only,
-            "intensityPreference": _lowest_intensity(a.intensityPreference, b.intensityPreference).value,
-            "giverReceiverRole": _shared_role(a.giverReceiverRole, b.giverReceiverRole),
+            "intensityPreference": lowest_intensity.value,
+            "giverReceiverRole": shared_role,
             "profileRoles": {
                 first.profileId: a.giverReceiverRole.value,
                 second.profileId: b.giverReceiverRole.value,
             },
             "partnerSharePermission": share_permission.value,
-            "commentsShareable": (
-                a.commentsShareable if share_permission == PartnerSharePermission.FULL else ""
-            ),
+            "shareableComments": shareable_comments,
+            "compatibilityNotes": [
+                f"Lowest shared intensity: {lowest_intensity.value}.",
+                f"Stricter real-world boundary: {real_world.value}.",
+                "Fantasy-only applies." if fantasy_only else "Fantasy-only not required by either profile.",
+                f"Least permissive sharing mode: {share_permission.value}.",
+            ],
         })
 
     return {
@@ -195,14 +227,27 @@ def compare_profiles(
     }
 
 
-def _eligible_items(profile: UserPreferenceProfile, context: ContextType) -> list[tuple[str, PreferenceItem]]:
+def _eligible_items(
+    profile: UserPreferenceProfile,
+    context: ContextType,
+    category_ids: list[str] | None = None,
+    intensity: IntensityPreference | None = None,
+    favorites_only: bool = False,
+) -> list[tuple[str, PreferenceItem]]:
+    allowed_categories = set(category_ids or [])
     eligible: list[tuple[str, PreferenceItem]] = []
     for category_id, item in iter_items(profile):
+        if allowed_categories and category_id not in allowed_categories:
+            continue
         if context not in item.context:
             continue
         if item.fantasyInterest == FantasyInterest.NONE:
             continue
+        if favorites_only and item.fantasyInterest != FantasyInterest.FAVORITE:
+            continue
         if item.textRoleplayWillingness == TextRoleplayWillingness.NO:
+            continue
+        if intensity and item.intensityPreference != intensity:
             continue
         eligible.append((category_id, item))
     return eligible
@@ -251,11 +296,18 @@ def build_preference_snapshot(
     )
 
 
-def _weighted_sample(items: list[tuple[str, PreferenceItem]], count: int) -> list[tuple[str, PreferenceItem]]:
+def _weighted_sample(
+    items: list[tuple[str, PreferenceItem]],
+    count: int,
+    explore_lower_interest: bool = False,
+) -> list[tuple[str, PreferenceItem]]:
     pool = list(items)
     selected: list[tuple[str, PreferenceItem]] = []
     while pool and len(selected) < count:
-        weights = [max(1, FANTASY_RANK[item.fantasyInterest]) for _, item in pool]
+        weights = [
+            max(1, 5 - FANTASY_RANK[item.fantasyInterest]) if explore_lower_interest else max(1, FANTASY_RANK[item.fantasyInterest])
+            for _, item in pool
+        ]
         choice = random.choices(pool, weights=weights, k=1)[0]
         selected.append(choice)
         pool.remove(choice)
@@ -267,10 +319,21 @@ def build_random_fantasy(
     context: ContextType = ContextType.AI,
     selected_count: int = 4,
     sharing_mode: SharingMode = SharingMode.PRIVATE,
+    category_ids: list[str] | None = None,
+    intensity: IntensityPreference | None = None,
+    favorites_only: bool = False,
+    explore_lower_interest: bool = False,
+    include_reality_bridge: bool = False,
 ) -> GeneratedFantasy:
-    eligible = _eligible_items(profile, context)
-    selected = _weighted_sample(eligible, max(1, min(selected_count, 6)))
-    snapshot = build_preference_snapshot(profile, selected, include_reality_bridge=False)
+    eligible = _eligible_items(
+        profile,
+        context,
+        category_ids=category_ids,
+        intensity=intensity,
+        favorites_only=favorites_only,
+    )
+    selected = _weighted_sample(eligible, max(1, min(selected_count, 6)), explore_lower_interest=explore_lower_interest)
+    snapshot = build_preference_snapshot(profile, selected, include_reality_bridge=include_reality_bridge)
 
     labels = [item.label for _, item in selected]
     role_bits = [f"{item.label}: {item.giverReceiverRole.value}" for _, item in selected]
@@ -304,6 +367,16 @@ def build_random_fantasy(
         seed_prompt += " Giver/receiver preferences: " + "; ".join(role_bits) + "."
     if identity_bits:
         seed_prompt += " Profile context: " + "; ".join(identity_bits) + "."
+    if category_ids:
+        seed_prompt += " Category focus: " + "; ".join(category_ids) + "."
+    if intensity:
+        seed_prompt += f" Target intensity: {intensity.value}."
+    if favorites_only:
+        seed_prompt += " Selection mode: favorites only."
+    elif explore_lower_interest:
+        seed_prompt += " Selection mode: explore lower-interest compatible themes."
+    if include_reality_bridge and profile.realityBridge.enabled:
+        seed_prompt += " Reality bridge metadata is stored separately for discussion; keep fictional narration separate."
     if profile.globalPreferences.fadeToBlack:
         seed_prompt += " Use fade-to-black handling for explicit detail."
 
@@ -317,6 +390,7 @@ def build_random_fantasy(
         lorebook={
             "FantasyBoundary": "Fantasy interest is fictional roleplay data and never real-world consent.",
             "Privacy": "Private comments and unshared notes must not appear in narration or exports.",
+            "GenerationControls": "Honor category, intensity, context, and sharing controls from the saved preference snapshot.",
         },
         selectedThemeIds=[item.id for _, item in selected],
     )
@@ -334,6 +408,65 @@ def build_random_fantasy(
         seedPrompt=seed_prompt,
         synopsis=synopsis,
         content=synopsis,
+        campaignSeed=campaign_seed,
+    )
+
+
+def build_overlap_fantasy(
+    first: UserPreferenceProfile,
+    second: UserPreferenceProfile,
+    context: ContextType = ContextType.AI,
+    selected_count: int = 4,
+) -> GeneratedFantasy:
+    comparison = compare_profiles(first, second, context=context)
+    match_ids = [match["id"] for match in comparison["matches"][:max(1, min(selected_count, 6))]]
+    first_items = {item.id: (category_id, item) for category_id, item in iter_items(first)}
+    selected = [first_items[item_id] for item_id in match_ids if item_id in first_items]
+    snapshot = build_preference_snapshot(first, selected, include_reality_bridge=False)
+    labels = [match["label"] for match in comparison["matches"][:len(selected)]]
+    if not labels:
+        labels = ["shared boundaries", "collaborative pacing", "mutual comfort"]
+
+    seed_prompt = (
+        "Create a non-graphic adult roleplay scene concept from mutually compatible overlap only. "
+        "Fantasy interest is not real-world consent. Use the stricter boundary, lowest shared intensity, "
+        "and fantasy-only constraints from the comparison. Matched themes: "
+        + "; ".join(labels)
+        + "."
+    )
+    campaign_seed = CampaignSeed(
+        worldConcept="A flexible roleplay setup shaped only by mutually compatible profile overlap.",
+        startingScene=(
+            "Begin with a calm, consent-aware setup where both participants can choose how to proceed. "
+            "Keep the scene conceptual, story-forward, and bounded by the shared overlap."
+        ),
+        protagonistGuidance="Reflect shared compatibility without assuming real-world willingness or private notes.",
+        lorebook={
+            "FantasyBoundary": "Fantasy interest is fictional roleplay data and never real-world consent.",
+            "OverlapOnly": "Use only mutually compatible themes from the comparison; stricter boundaries win.",
+            "Privacy": "Private comments and unshared notes must not appear in narration or exports.",
+        },
+        selectedThemeIds=[item.id for _, item in selected],
+    )
+    now = now_iso()
+    return GeneratedFantasy(
+        ownerProfileId=first.profileId,
+        ownerUserId=first.userId,
+        title="Overlap-Compatible Fantasy",
+        createdAt=now,
+        updatedAt=now,
+        createdFromProfileVersion=first.profileVersion,
+        preferenceSnapshot=snapshot,
+        sharingMode=SharingMode.OVERLAP_ONLY,
+        seedPrompt=seed_prompt,
+        synopsis=(
+            "A non-graphic, story-oriented roleplay premise built from mutually compatible profile overlap. "
+            "It keeps fantasy and real-world willingness separate."
+        ),
+        content=(
+            "A non-graphic, story-oriented roleplay premise built from mutually compatible profile overlap. "
+            "It keeps fantasy and real-world willingness separate."
+        ),
         campaignSeed=campaign_seed,
     )
 
@@ -357,3 +490,70 @@ def redact_fantasy(fantasy: GeneratedFantasy, include_private: bool = False, unl
             if k in {"preferredPOV", "fadeToBlack", "consentStyle"}
         }
     return data
+
+
+def export_fantasy_for_sharing(
+    fantasy: GeneratedFantasy,
+    mode: SharingMode,
+    unlocked_content: str | None = None,
+) -> dict[str, Any]:
+    protected = fantasy.passwordProtection.enabled
+    protected_content_required = mode in {
+        SharingMode.PRIVATE,
+        SharingMode.FULL_SCENE,
+        SharingMode.FULL_SCENE_WITH_NOTES,
+    }
+    if protected and protected_content_required and unlocked_content is None:
+        raise ValueError("Password is required to export protected fantasy content.")
+
+    selected = fantasy.preferenceSnapshot.selectedThemes
+    selected_summary = [
+        {
+            "id": theme.get("id"),
+            "label": theme.get("label"),
+            "fantasyInterest": theme.get("fantasyInterest"),
+            "textRoleplayWillingness": theme.get("textRoleplayWillingness"),
+            "realWorldWillingness": theme.get("realWorldWillingness"),
+            "fantasyOnly": theme.get("fantasyOnly"),
+            "intensityPreference": theme.get("intensityPreference"),
+            "giverReceiverRole": theme.get("giverReceiverRole"),
+        }
+        for theme in selected
+    ]
+    content = unlocked_content if protected else fantasy.content
+
+    payload: dict[str, Any] = {
+        "exportMode": mode.value,
+        "safetyPrinciple": "Fantasy interest is not real-world consent.",
+        "passwordProtected": protected,
+        "fantasy": {
+            "id": fantasy.id,
+            "title": fantasy.title,
+            "createdAt": fantasy.createdAt,
+            "createdFromProfileVersion": fantasy.createdFromProfileVersion,
+            "sharingMode": fantasy.sharingMode.value,
+            "synopsis": fantasy.synopsis,
+            "selectedThemes": selected_summary,
+        },
+    }
+
+    if mode == SharingMode.SUMMARY_ONLY:
+        return payload
+
+    if mode == SharingMode.OVERLAP_ONLY:
+        payload["fantasy"]["synopsis"] = ""
+        payload["fantasy"]["selectedThemes"] = [
+            theme for theme in selected_summary
+            if theme.get("realWorldWillingness") != RealWorldWillingness.HARD_NO.value
+        ]
+        return payload
+
+    if mode in {SharingMode.PRIVATE, SharingMode.FULL_SCENE, SharingMode.FULL_SCENE_WITH_NOTES}:
+        payload["fantasy"]["content"] = content
+        payload["fantasy"]["campaignSeed"] = fantasy.campaignSeed.model_dump(mode="json")
+
+    if mode in {SharingMode.PRIVATE, SharingMode.FULL_SCENE_WITH_NOTES}:
+        payload["fantasy"]["realityBridgeNotes"] = fantasy.realityBridgeNotes
+        payload["fantasy"]["preferenceSnapshot"] = fantasy.preferenceSnapshot.model_dump(mode="json")
+
+    return payload

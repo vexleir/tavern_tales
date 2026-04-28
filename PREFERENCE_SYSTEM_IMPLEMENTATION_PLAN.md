@@ -186,13 +186,13 @@ Goal: replace the dense editor-first experience with a guided first-time flow wh
 
 Tasks:
 
-- [ ] Add onboarding completion state handling in UI.
-- [ ] Create step-based questionnaire: identity/context, global prefs, core categories, sharing defaults, reality bridge.
-- [ ] Let users skip categories and return later.
-- [ ] Save progress safely.
-- [ ] Mark `onboardingCompletedAt` after completion.
-- [ ] Keep advanced editor available from main profile page.
-- [ ] Add tests for onboarding persistence where feasible.
+- [x] Add onboarding completion state handling in UI.
+- [x] Create step-based questionnaire: identity/context, global prefs, core categories, sharing defaults, reality bridge.
+- [x] Let users skip categories and return later.
+- [x] Save progress safely.
+- [x] Mark `onboardingCompletedAt` after completion.
+- [x] Keep advanced editor available from main profile page.
+- [x] Add tests for onboarding persistence where feasible.
 
 Suggested files:
 
@@ -205,13 +205,13 @@ Goal: give users better control over random/preference-aware fantasy generation.
 
 Tasks:
 
-- [ ] Add controls for selected categories.
-- [ ] Add controls for intensity target.
-- [ ] Add controls for context: AI, partner, multiplayer.
-- [ ] Add option to bias toward favorites or explore lower-interest themes.
-- [ ] Add option to include/exclude reality bridge notes from generation metadata, still not from fictional content unless explicitly requested.
-- [ ] Add "regenerate draft" and "duplicate draft" actions.
-- [ ] Add fantasy draft import/export.
+- [x] Add controls for selected categories.
+- [x] Add controls for intensity target.
+- [x] Add controls for context: AI, partner, multiplayer.
+- [x] Add option to bias toward favorites or explore lower-interest themes.
+- [x] Add option to include/exclude reality bridge notes from generation metadata, still not from fictional content unless explicitly requested.
+- [x] Add "regenerate draft" and "duplicate draft" actions.
+- [x] Add fantasy draft import/export.
 
 Suggested files:
 
@@ -225,13 +225,13 @@ Goal: implement privacy-respecting sharing and output flows.
 
 Tasks:
 
-- [ ] Implement fantasy export modes: private, summary only, overlap only, full scene, full scene with notes.
-- [ ] Ensure password-protected fantasies require unlock before any protected export.
-- [ ] Ensure private comments are omitted unless user explicitly exports private data.
-- [ ] Add printable fantasy view.
-- [ ] Add printable profile comparison summary.
-- [ ] Add tests for each export mode.
-- [ ] Add UI language that clearly distinguishes fictional sharing from real-world consent.
+- [x] Implement fantasy export modes: private, summary only, overlap only, full scene, full scene with notes.
+- [x] Ensure password-protected fantasies require unlock before any protected export.
+- [x] Ensure private comments are omitted unless user explicitly exports private data.
+- [x] Add printable fantasy view.
+- [x] Add printable profile comparison summary.
+- [x] Add tests for each export mode.
+- [x] Add UI language that clearly distinguishes fictional sharing from real-world consent.
 
 Suggested files:
 
@@ -246,13 +246,13 @@ Goal: move from basic comparison to a useful partner planning surface.
 
 Tasks:
 
-- [ ] Show blocked theme details and reasons.
-- [ ] Show shareable comments when sharing permission allows.
-- [ ] Show strictest boundary and lowest intensity explanation.
-- [ ] Add partner summary view that omits private notes.
-- [ ] Add overlap-only fantasy draft generation.
-- [ ] Add reality bridge discussion view that excludes hard-no items.
-- [ ] Prepare comparison API shape for future remote/account profiles.
+- [x] Show blocked theme details and reasons.
+- [x] Show shareable comments when sharing permission allows.
+- [x] Show strictest boundary and lowest intensity explanation.
+- [x] Add partner summary view that omits private notes.
+- [x] Add overlap-only fantasy draft generation.
+- [x] Add reality bridge discussion view that excludes hard-no items.
+- [x] Prepare comparison API shape for future remote/account profiles.
 
 Suggested files:
 
@@ -285,13 +285,13 @@ Suggested files:
 
 ## Open Product Decisions
 
-- [ ] Should soft-deleted profiles be recoverable from the UI?
-- [ ] Should saved fantasy drafts remain visible after their source profile is deleted?
-- [ ] Should profile comparison support more than two profiles later?
-- [ ] Should campaign creation allow selecting a profile directly without first creating a saved fantasy draft?
-- [ ] Should generated fantasy drafts have tags/categories for filtering?
-- [ ] Should local encrypted key export/backup be offered in-app?
-- [ ] Should profile import/export include fantasies, or should those remain separate?
+- [x] Should soft-deleted profiles be recoverable from the UI? Decision: no recovery UI; require delete confirmation.
+- [x] Should saved fantasy drafts remain visible after their source profile is deleted? Decision: yes.
+- [x] Should profile comparison support more than two profiles later? Decision: yes, future multi-profile comparison should be supported.
+- [x] Should campaign creation allow selecting a profile directly without first creating a saved fantasy draft? Decision: yes.
+- [x] Should generated fantasy drafts have tags/categories for filtering? Decision: yes.
+- [x] Should local encrypted key export/backup be offered in-app? Decision: yes.
+- [x] Should profile import/export include fantasies, or should those remain separate? Decision: keep profile and fantasy import/export separate.
 
 ---
 
@@ -331,3 +331,42 @@ This will make the preference system part of actual Tavern Tales gameplay instea
 - Added tests for prompt rendering and campaign init persistence.
 - Added an in-play sidebar surface showing active saved fantasy/profile context and the consent boundary.
 - Phase 1 is functionally complete for local saved-fantasy-launched campaigns.
+
+### 2026-04-28 - Phase 2 Onboarding
+
+- Added first-time profile onboarding UI for incomplete profiles.
+- Onboarding steps cover identity/global context, fantasy/text/real-world boundary sampling, sharing defaults, reality bridge, and review.
+- Users can save progress, move between steps, finish onboarding, or jump into the advanced editor.
+- Finishing onboarding persists `onboardingCompletedAt` and `lastReviewedAt`.
+- Added backend/API test coverage that list summaries report `onboardingCompleted` after profile update.
+- Phase 2 is functionally complete for the current local-first profile editor.
+
+### 2026-04-28 - Phase 3 Generation Controls
+
+- Added backend generation controls for selected categories, target intensity, context, sharing mode, favorites-only mode, lower-interest exploration, and reality bridge metadata inclusion.
+- Generated draft seed prompts now record category focus, target intensity, and selection mode in safe conceptual language.
+- Added frontend generator controls in the preference profile sidebar.
+- Added draft regenerate and duplicate actions.
+- Added saved fantasy draft export/import from the profile UI. Imported drafts are copied into the active profile and are not imported with password protection enabled.
+- Added backend tests for controlled generation behavior and API request persistence.
+- Phase 3 is functionally complete for local-first controlled generation.
+
+### 2026-04-28 - Phase 4 Sharing And Export Slice
+
+- Recorded product decisions for delete recovery, fantasy visibility after source deletion, future multi-profile comparison, direct profile campaign creation, draft tags/filtering, local key backup, and separate profile/fantasy export.
+- Added backend fantasy export endpoint with privacy modes: private, summary only, overlap only, full scene, and full scene with notes.
+- Protected drafts now require a password for content-bearing export modes.
+- Added export-mode UI for saved fantasy drafts.
+- Added print-friendly fantasy view for unlocked drafts.
+- Added backend tests for summary, overlap, full scene, full scene with notes, and protected export behavior.
+- Added printable profile comparison summary.
+- Phase 4 is functionally complete for local-first sharing/export/print workflows.
+
+### 2026-04-28 - Phase 5 Two-Person Mode
+
+- Expanded comparison API results with blocked theme details, per-profile boundary summaries, compatibility notes, profile roles, and shareable comments when both profiles allow full sharing.
+- Comparison UI now shows blocked details, strictest real-world boundary, lowest shared intensity, fantasy-only status, least permissive sharing, and shareable partner comments.
+- Added overlap-only fantasy draft generation from two compatible profiles.
+- Reality bridge exclusions remain explicit and hard-no themes stay out of bridge suggestions.
+- Comparison result shape now carries profile ids and per-profile role/boundary data, keeping it ready for future account/network profile sources.
+- Phase 5 is functionally complete for local two-profile comparison.
