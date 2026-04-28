@@ -162,7 +162,7 @@ Goal: make the completed local-first system clearer, safer, and easier to test m
 
 Tasks:
 
-- [x] Clarify giver/receiver/both wording throughout profile editing, onboarding, generation, and comparison.
+- [x] Clarify stored giver/receiver/both wording throughout profile editing, onboarding, generation, and comparison with explicit initiate/direct vs follow/yield labels.
 - [x] Add per-item direction selection to regular Profile Onboarding.
 - [x] Remove ambiguous checklist language where the profile's desired side of a theme could be misread.
 - [ ] Add manual test notes for profile creation, onboarding, generation, comparison, export/import, and campaign handoff.
@@ -401,9 +401,15 @@ The original six implementation phases are now functionally complete for the loc
 
 ### 2026-04-28 - Phase 7 Preference UX Polish
 
-- Renamed ambiguous giver/receiver UI language to side-specific wording: give/lead, receive/be led, or either/both.
+- Renamed ambiguous giver/receiver UI language to side-specific wording: initiate/direct, follow/yield, or either role.
 - Added per-item side selection to regular Profile Onboarding, not only the advanced editor.
 - Updated comparison, print, and generated seed prompt wording so side preference is explicit.
 - Refreshed built-in checklist labels/descriptions to reduce ambiguity around who is doing or receiving a theme.
 - Updated default category merge behavior so existing profiles receive improved built-in copy while preserving answers and notes.
 - Verified with focused backend preference/prompt tests, frontend lint, and frontend production build.
+
+### 2026-04-28 - Phase 7 Role-Side Clarity Follow-Up
+
+- Replaced remaining give/receive wording in user-facing role-side choices with first-person initiate/direct vs follow/yield language.
+- Added onboarding/editor help text clarifying that for submission or surrender themes, follow/yield means this profile is the submitting side, while initiate/direct means this profile guides a submitting partner.
+- Updated power, control, and sensation default descriptions to define what each role-side choice means for the specific item.

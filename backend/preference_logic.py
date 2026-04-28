@@ -60,9 +60,9 @@ SHARE_RANK = {
 }
 
 ROLE_DIRECTION_LABELS = {
-    GiverReceiverRole.GIVER: "profile wants to give, lead, direct, or initiate this theme",
-    GiverReceiverRole.RECEIVER: "profile wants to receive, be led, follow, or experience this theme",
-    GiverReceiverRole.BOTH: "profile is open to either side or both sides of this theme",
+    GiverReceiverRole.GIVER: "profile wants to initiate, guide, direct, set rules, or lead this theme",
+    GiverReceiverRole.RECEIVER: "profile wants to follow, yield, be guided, respond, or experience this theme",
+    GiverReceiverRole.BOTH: "profile is open to either role in this theme",
 }
 
 

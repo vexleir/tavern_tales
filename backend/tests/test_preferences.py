@@ -102,7 +102,7 @@ def test_default_profile_has_bdsm_style_checklist_domains(temp_preference_dirs):
     assert "sensation_play" in categories
     assert "symbols_and_gear" in categories
     assert len(categories["power_dynamics"].items) >= 8
-    assert "Choose the profile's side" in categories["power_dynamics"].description
+    assert "initiates/directs, follows/yields" in categories["power_dynamics"].description
     all_item_ids = {item.id for category in profile.categories for item in category.items}
     assert "power_submission" in all_item_ids
     assert "control_restraint_light" in all_item_ids
@@ -198,7 +198,7 @@ def test_random_fantasy_uses_profile_context_and_creates_campaign_seed(temp_pref
     assert "Fantasy interest is not real-world consent" in fantasy.seedPrompt
     assert "gender: woman" in fantasy.seedPrompt
     assert "Role-side preferences" in fantasy.seedPrompt
-    assert "open to either side or both sides" in fantasy.seedPrompt
+    assert "open to either role" in fantasy.seedPrompt
     assert "Category focus" in fantasy.seedPrompt
     assert "Target intensity: moderate" in fantasy.seedPrompt
     assert "favorites only" in fantasy.seedPrompt
