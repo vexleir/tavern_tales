@@ -102,6 +102,7 @@ def test_default_profile_has_bdsm_style_checklist_domains(temp_preference_dirs):
     assert "sensation_play" in categories
     assert "symbols_and_gear" in categories
     assert len(categories["power_dynamics"].items) >= 8
+    assert "Choose the profile's side" in categories["power_dynamics"].description
     all_item_ids = {item.id for category in profile.categories for item in category.items}
     assert "power_submission" in all_item_ids
     assert "control_restraint_light" in all_item_ids
@@ -116,6 +117,7 @@ async def test_existing_profiles_receive_new_default_items(temp_preference_dirs)
     profile = preference_store.new_profile("Legacy")
     profile.categories = profile.categories[:1]
     profile.categories[0].items = profile.categories[0].items[:1]
+    profile.categories[0].items[0].label = "Guidance and leadership"
     saved = await preference_store.save_profile(profile, bump_version=False)
 
     loaded = await preference_store.load_profile(saved.profileId)
@@ -123,6 +125,7 @@ async def test_existing_profiles_receive_new_default_items(temp_preference_dirs)
     categories = {category.id: category for category in loaded.categories}
     assert "sensation_play" in categories
     assert any(item.id == "power_submission" for item in categories["power_dynamics"].items)
+    assert categories["power_dynamics"].items[0].label == "Dominance, guidance, or leadership"
 
 
 def test_matching_keeps_fantasy_and_real_world_boundaries_separate(temp_preference_dirs):
@@ -194,7 +197,8 @@ def test_random_fantasy_uses_profile_context_and_creates_campaign_seed(temp_pref
     assert fantasy.createdFromProfileVersion == profile.profileVersion
     assert "Fantasy interest is not real-world consent" in fantasy.seedPrompt
     assert "gender: woman" in fantasy.seedPrompt
-    assert "Giver/receiver preferences" in fantasy.seedPrompt
+    assert "Role-side preferences" in fantasy.seedPrompt
+    assert "open to either side or both sides" in fantasy.seedPrompt
     assert "Category focus" in fantasy.seedPrompt
     assert "Target intensity: moderate" in fantasy.seedPrompt
     assert "favorites only" in fantasy.seedPrompt
@@ -242,8 +246,16 @@ def test_preference_api_create_export_and_random_fantasy(temp_preference_dirs):
     assert created["categories"]
 
     exported = c.get(f"/api/preference-profiles/{profile_id}/export").json()
+    assert exported["exportType"] == "tavern_tales_preference_profile"
+    assert exported["owner"]["profileId"] == profile_id
+    assert exported["fantasiesIncluded"] is False
     assert exported["exportIncludesPrivate"] is False
     assert exported["profile"]["realityBridge"]["enabled"] is False
+
+    key_backup = c.get("/api/preferences/key-backup")
+    assert key_backup.status_code == 200
+    assert key_backup.json()["backupType"] == "tavern_tales_local_encryption_key"
+    assert key_backup.json()["key"]
 
     # Save once with an eligible item so random generation has profile data.
     created["categories"][0]["items"][0]["fantasyInterest"] = "favorite"
@@ -328,6 +340,8 @@ def test_preference_api_create_export_and_random_fantasy(temp_preference_dirs):
         json={"mode": "full_scene", "password": "correct horse battery staple"},
     )
     assert full_export.status_code == 200
+    assert full_export.json()["exportType"] == "tavern_tales_fantasy_draft"
+    assert full_export.json()["owner"]["profileId"] == profile_id
     assert full_export.json()["fantasy"]["content"] == "edited draft body"
     assert "realityBridgeNotes" not in full_export.json()["fantasy"]
 
@@ -363,13 +377,45 @@ def test_preference_api_create_export_and_random_fantasy(temp_preference_dirs):
     assert unlocked_again["content"] == "edited protected draft body"
 
     listed = c.get(f"/api/fantasies?profile_id={profile_id}").json()
-    assert listed[0]["id"] == random_fantasy["id"]
+    assert any(fantasy["id"] == random_fantasy["id"] for fantasy in listed)
+    assert any(fantasy["sharingMode"] == "overlap_only" for fantasy in listed)
 
     deleted = c.delete(f"/api/preference-profiles/{profile_id}")
     assert deleted.status_code == 200
     assert deleted.json()["status"] == "success"
     assert c.get(f"/api/preference-profiles/{profile_id}").status_code == 404
     assert all(summary["profileId"] != profile_id for summary in c.get("/api/preference-profiles").json())
+
+
+def test_profile_import_creates_conflict_safe_identity(temp_preference_dirs):
+    import main
+
+    c = TestClient(main.app)
+    created = c.post("/api/preference-profiles", json={"displayName": "Import Source"}).json()
+    created["customPreferences"].append({
+        "createdBy": created["profileId"],
+        "label": "Reusable question",
+        "description": "",
+        "responseType": "text",
+        "options": [],
+        "response": "",
+        "fantasyInterest": "none",
+        "realWorldWillingness": "hard_no",
+        "textRoleplayWillingness": "no",
+        "fantasyOnly": True,
+        "context": ["ai"],
+        "partnerSharePermission": "private",
+        "commentsPrivate": "",
+        "commentsShareable": "",
+        "status": "active",
+    })
+    imported = c.post(
+        "/api/preference-profiles/import",
+        json={"profile": created, "displayNameSuffix": "(Copy)"},
+    ).json()
+    assert imported["profileId"] != created["profileId"]
+    assert imported["displayName"].endswith("(Copy)")
+    assert imported["customPreferences"][0]["createdBy"] == imported["profileId"]
 
 
 def test_local_dev_cors_allows_vite_alternate_port():

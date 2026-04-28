@@ -59,6 +59,12 @@ SHARE_RANK = {
     PartnerSharePermission.FULL: 3,
 }
 
+ROLE_DIRECTION_LABELS = {
+    GiverReceiverRole.GIVER: "profile wants to give, lead, direct, or initiate this theme",
+    GiverReceiverRole.RECEIVER: "profile wants to receive, be led, follow, or experience this theme",
+    GiverReceiverRole.BOTH: "profile is open to either side or both sides of this theme",
+}
+
 
 def _roles_compatible(a: GiverReceiverRole, b: GiverReceiverRole) -> bool:
     if a == GiverReceiverRole.BOTH or b == GiverReceiverRole.BOTH:
@@ -336,7 +342,7 @@ def build_random_fantasy(
     snapshot = build_preference_snapshot(profile, selected, include_reality_bridge=include_reality_bridge)
 
     labels = [item.label for _, item in selected]
-    role_bits = [f"{item.label}: {item.giverReceiverRole.value}" for _, item in selected]
+    role_bits = [f"{item.label}: {ROLE_DIRECTION_LABELS[item.giverReceiverRole]}" for _, item in selected]
     if not labels:
         labels = ["slow-burn character tension", "clear boundaries", "collaborative worldbuilding"]
 
@@ -364,7 +370,7 @@ def build_random_fantasy(
         + "."
     )
     if role_bits:
-        seed_prompt += " Giver/receiver preferences: " + "; ".join(role_bits) + "."
+        seed_prompt += " Role-side preferences: " + "; ".join(role_bits) + "."
     if identity_bits:
         seed_prompt += " Profile context: " + "; ".join(identity_bits) + "."
     if category_ids:
@@ -523,11 +529,20 @@ def export_fantasy_for_sharing(
     content = unlocked_content if protected else fantasy.content
 
     payload: dict[str, Any] = {
+        "exportType": "tavern_tales_fantasy_draft",
+        "schemaVersion": fantasy.schemaVersion,
         "exportMode": mode.value,
         "safetyPrinciple": "Fantasy interest is not real-world consent.",
         "passwordProtected": protected,
+        "owner": {
+            "userId": fantasy.ownerUserId,
+            "profileId": fantasy.ownerProfileId,
+            "profileVersion": fantasy.createdFromProfileVersion,
+        },
         "fantasy": {
             "id": fantasy.id,
+            "ownerProfileId": fantasy.ownerProfileId,
+            "ownerUserId": fantasy.ownerUserId,
             "title": fantasy.title,
             "createdAt": fantasy.createdAt,
             "createdFromProfileVersion": fantasy.createdFromProfileVersion,

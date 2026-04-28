@@ -55,7 +55,7 @@ from schema import (
     SamplingOverrides,
     StatBound,
 )
-from secure_storage import SecureStorageError, password_encrypt_text
+from secure_storage import SecureStorageError, export_local_key_backup, password_encrypt_text
 
 configure_logging()
 log = logging.getLogger(__name__)
@@ -179,6 +179,7 @@ class CreatePreferenceProfileRequest(BaseModel):
 class ImportPreferenceProfileRequest(BaseModel):
     profile: dict[str, Any]
     userId: str = Field(default="local_default", max_length=120)
+    displayNameSuffix: str = Field(default="(Imported)", max_length=80)
 
 
 class RandomFantasyRequest(BaseModel):
@@ -329,7 +330,20 @@ async def export_preference_profile(profile_id: str, include_private: bool = Fal
         payload = preference_logic.redact_profile(profile, include_private=include_private)
         suffix = "private" if include_private else "redacted"
         return JSONResponse(
-            content={"profile": payload, "exportIncludesPrivate": include_private},
+            content={
+                "exportType": "tavern_tales_preference_profile",
+                "schemaVersion": profile.schemaVersion,
+                "exportedAt": datetime.now(timezone.utc).isoformat(),
+                "owner": {
+                    "userId": profile.userId,
+                    "profileId": profile.profileId,
+                    "profileVersion": profile.profileVersion,
+                    "displayName": profile.displayName,
+                },
+                "profile": payload,
+                "exportIncludesPrivate": include_private,
+                "fantasiesIncluded": False,
+            },
             headers={"Content-Disposition": f'attachment; filename="{profile_id}.{suffix}.preferences.json"'},
         )
     except HTTPException:
@@ -341,8 +355,16 @@ async def export_preference_profile(profile_id: str, include_private: bool = Fal
 @app.post("/api/preference-profiles/import")
 async def import_preference_profile(req: ImportPreferenceProfileRequest):
     try:
-        profile = await preference_store.import_profile(req.profile, user_id=req.userId)
+        profile = await preference_store.import_profile(req.profile, user_id=req.userId, display_name_suffix=req.displayNameSuffix)
         return preference_logic.redact_profile(profile, include_private=True)
+    except Exception as e:  # noqa: BLE001
+        raise _sensitive_storage_http_error(e)
+
+
+@app.get("/api/preferences/key-backup")
+async def export_preference_key_backup():
+    try:
+        return export_local_key_backup()
     except Exception as e:  # noqa: BLE001
         raise _sensitive_storage_http_error(e)
 

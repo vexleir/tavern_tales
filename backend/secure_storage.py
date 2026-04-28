@@ -79,6 +79,26 @@ def _read_or_create_local_key() -> bytes:
     return key
 
 
+def export_local_key_backup() -> dict[str, Any]:
+    """Return a user-controlled backup payload for the local encryption key."""
+    _require_crypto()
+    configured = os.environ.get(KEY_ENV, "").strip()
+    key = configured.encode("utf-8") if configured else _read_or_create_local_key()
+    source = "env" if configured else "local"
+    return {
+        "backupType": "tavern_tales_local_encryption_key",
+        "keySource": source,
+        "keyEnvVar": KEY_ENV,
+        "algorithm": ALGORITHM,
+        "exportedAt": _now(),
+        "key": key.decode("utf-8"),
+        "warning": (
+            "Keep this key private. Anyone with this key and your encrypted local preference/fantasy files "
+            "can decrypt them. Losing this key can make encrypted local data unrecoverable."
+        ),
+    }
+
+
 def _fernet_from_key(key: bytes):
     _require_crypto()
     try:

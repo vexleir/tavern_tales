@@ -156,6 +156,27 @@ Current known caveat:
 
 ## Remaining Phases
 
+### Phase 7 - Preference UX Polish And Hardening
+
+Goal: make the completed local-first system clearer, safer, and easier to test manually.
+
+Tasks:
+
+- [x] Clarify giver/receiver/both wording throughout profile editing, onboarding, generation, and comparison.
+- [x] Add per-item direction selection to regular Profile Onboarding.
+- [x] Remove ambiguous checklist language where the profile's desired side of a theme could be misread.
+- [ ] Add manual test notes for profile creation, onboarding, generation, comparison, export/import, and campaign handoff.
+- [ ] Review responsive layout density for the profile editor and generator side panel.
+- [ ] Add profile/fantasy tag filtering polish if needed.
+- [ ] Add import/export key-backup warnings or recovery affordances if needed.
+
+Suggested files:
+
+- `frontend/src/PreferenceProfiles.jsx`
+- `backend/preference_defaults.py`
+- `backend/preference_logic.py`
+- `backend/tests/test_preferences.py`
+
 ### Phase 1 - Live Roleplay Preference Integration
 
 Goal: make preference profiles affect actual Tavern Tales narration after campaign creation.
@@ -266,13 +287,13 @@ Goal: prepare the local model for later sync and remote sharing without implemen
 
 Tasks:
 
-- [ ] Confirm stable user/profile identifiers.
-- [ ] Add explicit owner fields to exported/shareable payloads.
-- [ ] Add migration/version strategy for profile schema changes.
-- [ ] Add import conflict handling.
-- [ ] Consider key strategy for encrypted sync.
-- [ ] Document local-key limitations and recovery risk.
-- [ ] Decide whether saved fantasies should be syncable, export-only, or local-only by default.
+- [x] Confirm stable user/profile identifiers.
+- [x] Add explicit owner fields to exported/shareable payloads.
+- [x] Add migration/version strategy for profile schema changes.
+- [x] Add import conflict handling.
+- [x] Consider key strategy for encrypted sync.
+- [x] Document local-key limitations and recovery risk.
+- [x] Decide whether saved fantasies should be syncable, export-only, or local-only by default.
 
 Suggested files:
 
@@ -297,17 +318,13 @@ Suggested files:
 
 ## Current Recommended Next Step
 
-Implement **Phase 1 - Live Roleplay Preference Integration**.
+Implement the post-plan polish items chosen from product decisions:
 
-Smallest useful slice:
+1. Direct profile-to-campaign creation without requiring a saved fantasy draft first.
+2. Draft tags/category filters for saved fantasy lists.
+3. Optional multi-profile comparison groundwork beyond two profiles.
 
-1. Add optional preference snapshot metadata to campaign state.
-2. Pass draft/profile snapshot into campaign init when launching from a saved fantasy draft.
-3. Add prompt-builder section with safe redacted preference guidance.
-4. Test that private comments, protected content, and reality bridge private fields are excluded.
-5. Surface active profile/draft context in the play UI.
-
-This will make the preference system part of actual Tavern Tales gameplay instead of only setup and drafting.
+The original six implementation phases are now functionally complete for the local-first version.
 
 ---
 
@@ -370,3 +387,23 @@ This will make the preference system part of actual Tavern Tales gameplay instea
 - Reality bridge exclusions remain explicit and hard-no themes stay out of bridge suggestions.
 - Comparison result shape now carries profile ids and per-profile role/boundary data, keeping it ready for future account/network profile sources.
 - Phase 5 is functionally complete for local two-profile comparison.
+
+### 2026-04-28 - Phase 6 Account/Network Readiness
+
+- Added explicit owner/export metadata to profile exports and fantasy exports.
+- Profile exports now state that fantasies are not included, matching the product decision to keep exports separate.
+- Profile import now creates a fresh profile id, appends a configurable suffix, resets versioning, and rewrites custom-question ownership from the old profile id to the new one.
+- Added local encryption key backup endpoint and UI button.
+- Added `PREFERENCE_SYSTEM_DATA_NOTES.md` documenting identifiers, export boundaries, schema migration strategy, encryption key risks, and future sharing assumptions.
+- Added backend tests for key backup, export metadata, and conflict-safe profile import.
+- Verified Phase 6 with focused backend preference/prompt tests, frontend lint, and frontend production build.
+- Phase 6 is complete for local-first future-readiness.
+
+### 2026-04-28 - Phase 7 Preference UX Polish
+
+- Renamed ambiguous giver/receiver UI language to side-specific wording: give/lead, receive/be led, or either/both.
+- Added per-item side selection to regular Profile Onboarding, not only the advanced editor.
+- Updated comparison, print, and generated seed prompt wording so side preference is explicit.
+- Refreshed built-in checklist labels/descriptions to reduce ambiguity around who is doing or receiving a theme.
+- Updated default category merge behavior so existing profiles receive improved built-in copy while preserving answers and notes.
+- Verified with focused backend preference/prompt tests, frontend lint, and frontend production build.

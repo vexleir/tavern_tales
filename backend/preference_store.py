@@ -220,15 +220,26 @@ async def list_profiles(include_archived: bool = False) -> list[PreferenceProfil
     return summaries
 
 
-async def import_profile(payload: dict[str, Any], user_id: str = "local_default") -> UserPreferenceProfile:
+async def import_profile(
+    payload: dict[str, Any],
+    user_id: str = "local_default",
+    display_name_suffix: str = "(Imported)",
+) -> UserPreferenceProfile:
     profile = UserPreferenceProfile.model_validate(payload)
+    original_profile_id = profile.profileId
     profile.profileId = pref_id("profile")
     profile.userId = user_id or profile.userId or "local_default"
-    profile.displayName = f"{profile.displayName} (Imported)"
+    suffix = display_name_suffix.strip()
+    if suffix and suffix not in profile.displayName:
+        profile.displayName = f"{profile.displayName} {suffix}"
     profile.profileVersion = 1
     now = now_iso()
     profile.createdAt = now
     profile.updatedAt = now
+    profile.lastReviewedAt = now
+    for question in profile.customPreferences:
+        if question.createdBy == original_profile_id:
+            question.createdBy = profile.profileId
     return await save_profile(profile, bump_version=False)
 
 

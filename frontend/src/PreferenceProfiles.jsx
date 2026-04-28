@@ -13,12 +13,28 @@ const roleOptions = ['dominant', 'submissive', 'switch', 'none'];
 const consentOptions = ['explicit', 'implied', 'negotiated'];
 const customResponseOptions = ['scale', 'yes_no', 'multi_select', 'text'];
 const giverReceiverOptions = ['giver', 'receiver', 'both'];
+const giverReceiverLabels = {
+  giver: 'I initiate, guide, or direct it',
+  receiver: 'I follow, yield, or experience it',
+  both: 'I am open to either side'
+};
+const roleSideHelp = 'For submission or surrender themes, follow/yield means this profile is the submitting side; initiate/direct means this profile guides a submitting partner.';
 const fantasyOnlyRealWorldValues = new Set(['hard_no', 'soft_no']);
 const onboardingCategoryIds = ['power_dynamics', 'control_themes', 'fantasy_elements', 'emotional_tone'];
 const onboardingSteps = ['Identity', 'Boundaries', 'Sharing', 'Reality Bridge', 'Review'];
 
 function labelize(value) {
   return String(value || '').replaceAll('_', ' ');
+}
+
+function optionLabel(value, labels = {}) {
+  return labels[value] || labelize(value);
+}
+
+function roleDirectionLabel(value) {
+  if (!value) return giverReceiverLabels.both;
+  if (value.startsWith('first_')) return labelize(value).replace('first ', 'First profile: ').replace(' second ', ' / second profile: ');
+  return giverReceiverLabels[value] || labelize(value);
 }
 
 function nowIso() {
@@ -35,7 +51,7 @@ function downloadJson(filename, payload) {
   URL.revokeObjectURL(url);
 }
 
-function SelectControl({ label, value, options, onChange }) {
+function SelectControl({ label, value, options, onChange, optionLabels = {}, help = '' }) {
   return (
     <label className="flex flex-col gap-1 text-xs text-slate-400">
       <span className="uppercase tracking-widest">{label}</span>
@@ -45,9 +61,10 @@ function SelectControl({ label, value, options, onChange }) {
         className="bg-fantasy-dark border border-slate-600 rounded px-2 py-2 text-sm text-slate-200 focus:outline-none focus:border-fantasy-accent"
       >
         {options.map(option => (
-          <option key={option} value={option}>{labelize(option)}</option>
+          <option key={option} value={option}>{optionLabel(option, optionLabels)}</option>
         ))}
       </select>
+      {help && <span className="text-[11px] leading-snug text-slate-500 normal-case tracking-normal">{help}</span>}
     </label>
   );
 }
@@ -459,7 +476,7 @@ export default function PreferenceProfiles({ onBack, onCreateCampaignFromDraft }
       '',
       'Matched themes:',
       ...(comparison.matches || []).map(match => (
-        `- ${match.label}: ${labelize(match.fantasyInterest)} fantasy, ${labelize(match.textRoleplayWillingness)} text, ${labelize(match.realWorldWillingness)} real world, ${labelize(match.intensityPreference)} intensity`
+                        `- ${match.label}: ${labelize(match.fantasyInterest)} fantasy, ${labelize(match.textRoleplayWillingness)} text, ${labelize(match.realWorldWillingness)} real world, ${labelize(match.intensityPreference)} intensity, ${roleDirectionLabel(match.giverReceiverRole)}`
       )),
       '',
       'Blocked themes:',
@@ -672,6 +689,21 @@ export default function PreferenceProfiles({ onBack, onCreateCampaignFromDraft }
     }
   };
 
+  const exportKeyBackup = async () => {
+    setBusy(true);
+    setError('');
+    try {
+      const res = await apiFetch('/api/preferences/key-backup');
+      if (!res.ok) throw new Error(await parseErrorResponse(res));
+      const payload = await res.json();
+      downloadJson('tavern-tales-local-encryption-key.backup.json', payload);
+    } catch (e) {
+      setError(`Could not export key backup: ${describeApiError(e)}`);
+    } finally {
+      setBusy(false);
+    }
+  };
+
   const importProfile = async (file) => {
     if (!file) return;
     setBusy(true);
@@ -757,6 +789,7 @@ export default function PreferenceProfiles({ onBack, onCreateCampaignFromDraft }
               Include private fields
             </label>
             <button onClick={exportProfile} disabled={!profile} className="bg-slate-800 hover:bg-slate-700 disabled:opacity-50 border border-slate-600 rounded px-3 py-2 text-sm">Export Profile</button>
+            <button onClick={exportKeyBackup} disabled={busy} className="bg-slate-800 hover:bg-slate-700 disabled:opacity-50 border border-slate-600 rounded px-3 py-2 text-sm">Backup Local Key</button>
             <button onClick={deleteProfile} disabled={!profile || busy} className="bg-red-900/40 hover:bg-red-800 disabled:opacity-50 text-red-200 border border-red-900/50 rounded px-3 py-2 text-sm">Delete Profile</button>
             <label className="block">
               <span className="text-xs uppercase tracking-widest text-slate-400">Import profile</span>
@@ -839,7 +872,7 @@ export default function PreferenceProfiles({ onBack, onCreateCampaignFromDraft }
                       <p className="text-sm text-slate-400 mb-4">{category.description}</p>
                       <div className="flex flex-col gap-3">
                         {category.items.map(item => (
-                          <div key={item.id} className="grid grid-cols-1 md:grid-cols-[1fr_130px_130px_150px] gap-3 items-end border-t border-slate-700/60 pt-3">
+                          <div key={item.id} className="grid grid-cols-1 md:grid-cols-[1fr_130px_130px_150px_170px] gap-3 items-end border-t border-slate-700/60 pt-3">
                             <div>
                               <div className="font-bold text-slate-100">{item.label}</div>
                               <div className="text-sm text-slate-400">{item.description}</div>
@@ -851,6 +884,14 @@ export default function PreferenceProfiles({ onBack, onCreateCampaignFromDraft }
                               value={item.realWorldWillingness}
                               options={realWorldOptions}
                               onChange={(v) => updateOnboardingItem(item.id, { realWorldWillingness: v, fantasyOnly: fantasyOnlyRealWorldValues.has(v) })}
+                            />
+                            <SelectControl
+                              label="My role in this theme"
+                              value={item.giverReceiverRole || 'both'}
+                              options={giverReceiverOptions}
+                              optionLabels={giverReceiverLabels}
+                              help={roleSideHelp}
+                              onChange={(v) => updateOnboardingItem(item.id, { giverReceiverRole: v })}
                             />
                           </div>
                         ))}
@@ -964,7 +1005,14 @@ export default function PreferenceProfiles({ onBack, onCreateCampaignFromDraft }
                             })}
                           />
                           <SelectControl label="Intensity" value={item.intensityPreference} options={intensityOptions} onChange={(v) => updateItem(categoryIndex, itemIndex, { intensityPreference: v })} />
-                          <SelectControl label="Giver / Receiver" value={item.giverReceiverRole || 'both'} options={giverReceiverOptions} onChange={(v) => updateItem(categoryIndex, itemIndex, { giverReceiverRole: v })} />
+                          <SelectControl
+                            label="My role in this theme"
+                            value={item.giverReceiverRole || 'both'}
+                            options={giverReceiverOptions}
+                            optionLabels={giverReceiverLabels}
+                            help={roleSideHelp}
+                            onChange={(v) => updateItem(categoryIndex, itemIndex, { giverReceiverRole: v })}
+                          />
                           <SelectControl label="Partner share" value={item.partnerSharePermission} options={shareOptions} onChange={(v) => updateItem(categoryIndex, itemIndex, { partnerSharePermission: v })} />
                           <TextControl label="Private notes" value={item.commentsPrivate} onChange={(v) => updateItem(categoryIndex, itemIndex, { commentsPrivate: v })} />
                           <TextControl label="Shareable notes" value={item.commentsShareable} onChange={(v) => updateItem(categoryIndex, itemIndex, { commentsShareable: v })} />
@@ -993,7 +1041,14 @@ export default function PreferenceProfiles({ onBack, onCreateCampaignFromDraft }
                   {visibleCustoms.map(({ question, index }) => (
                     <div key={question.id || index} className="bg-fantasy-dark/50 border border-slate-700 rounded p-4 grid grid-cols-1 md:grid-cols-[1fr_140px_140px_120px_100px] gap-3">
                       <TextControl label={`Question${question.status === 'archived' ? ' (archived)' : ''}`} rows={2} value={question.label} onChange={(v) => updateCustom(index, { label: v })} />
-                      <SelectControl label="Giver / Receiver" value={question.giverReceiverRole || 'both'} options={giverReceiverOptions} onChange={(v) => updateCustom(index, { giverReceiverRole: v })} />
+                      <SelectControl
+                        label="My role"
+                        value={question.giverReceiverRole || 'both'}
+                        options={giverReceiverOptions}
+                        optionLabels={giverReceiverLabels}
+                        help={roleSideHelp}
+                        onChange={(v) => updateCustom(index, { giverReceiverRole: v })}
+                      />
                       <SelectControl label="Sharing" value={question.partnerSharePermission || 'private'} options={shareOptions} onChange={(v) => updateCustom(index, { partnerSharePermission: v })} />
                       <button onClick={() => updateCustom(index, { status: question.status === 'archived' ? 'active' : 'archived' })} className="self-end bg-slate-800 hover:bg-slate-700 border border-slate-600 rounded px-3 py-2 text-sm">
                         {question.status === 'archived' ? 'Restore' : 'Archive'}
@@ -1117,7 +1172,7 @@ export default function PreferenceProfiles({ onBack, onCreateCampaignFromDraft }
                       {labelize(match.fantasyInterest)} interest / {labelize(match.textRoleplayWillingness)} text / {labelize(match.realWorldWillingness)} real world
                     </div>
                     <div className="text-xs text-slate-500 mt-1">
-                      {labelize(match.intensityPreference)} intensity / {labelize(match.giverReceiverRole)} role
+                      {labelize(match.intensityPreference)} intensity / {roleDirectionLabel(match.giverReceiverRole)}
                     </div>
                     <div className="text-xs text-slate-500 mt-2 flex flex-col gap-1">
                       {(match.compatibilityNotes || []).map(note => <span key={note}>{note}</span>)}
@@ -1140,10 +1195,10 @@ export default function PreferenceProfiles({ onBack, onCreateCampaignFromDraft }
                           <div className="font-bold text-amber-400">{blocked.label}</div>
                           <div className="text-xs text-slate-400">{(blocked.reasons || []).map(labelize).join(', ')}</div>
                           <div className="text-xs text-slate-500 mt-1">
-                            First: {labelize(blocked.first?.fantasyInterest)} fantasy / {labelize(blocked.first?.textRoleplayWillingness)} text / {labelize(blocked.first?.realWorldWillingness)} real
+                            First: {labelize(blocked.first?.fantasyInterest)} fantasy / {labelize(blocked.first?.textRoleplayWillingness)} text / {labelize(blocked.first?.realWorldWillingness)} real / {roleDirectionLabel(blocked.first?.giverReceiverRole)}
                           </div>
                           <div className="text-xs text-slate-500">
-                            Second: {labelize(blocked.second?.fantasyInterest)} fantasy / {labelize(blocked.second?.textRoleplayWillingness)} text / {labelize(blocked.second?.realWorldWillingness)} real
+                            Second: {labelize(blocked.second?.fantasyInterest)} fantasy / {labelize(blocked.second?.textRoleplayWillingness)} text / {labelize(blocked.second?.realWorldWillingness)} real / {roleDirectionLabel(blocked.second?.giverReceiverRole)}
                           </div>
                         </div>
                       ))}

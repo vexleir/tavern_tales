@@ -42,31 +42,31 @@ def default_categories() -> list[PreferenceCategory]:
         PreferenceCategory(
             id="power_dynamics",
             label="Power Dynamics",
-            description="Negotiated authority, service, surrender, leadership, and role exchange.",
+            description="Negotiated authority, service, surrender, leadership, and role exchange. Choose the profile's side for each item separately.",
             items=[
-                _item("power_guidance", "Guidance and leadership", "One character offers structure, direction, or calm authority."),
-                _item("power_submission", "Submission or surrender themes", "A character enjoys choosing to yield, follow, or be guided within clear limits."),
-                _item("power_switching", "Switching roles", "Characters shift who leads based on mood, scene, or negotiated context."),
-                _item("power_service", "Service-oriented dynamic", "Care, usefulness, tasks, or devotion are part of the emotional texture."),
-                _item("power_ownership_symbolic", "Symbolic ownership language", "Ownership, belonging, or possession is used as fictional or negotiated language."),
-                _item("power_protocol", "Protocol and etiquette", "Titles, rituals, manners, or formal scene structure matter to the dynamic."),
-                _item("power_training", "Training or improvement arc", "A scene explores practice, discipline, correction, and growth over time."),
+                _item("power_guidance", "Dominance, guidance, or leadership", "A theme where one side gives structure, direction, or calm authority and the other side may receive it."),
+                _item("power_submission", "Surrender or being guided", "A theme where one side chooses to yield, follow, or be guided within clear limits."),
+                _item("power_switching", "Switching between leading and following", "Characters shift who leads and who follows based on mood, scene, or negotiated context."),
+                _item("power_service", "Service-oriented dynamic", "One side offers care, usefulness, tasks, or devotion; choose whether this profile gives, receives, or can do either."),
+                _item("power_ownership_symbolic", "Symbolic ownership language", "Ownership, belonging, or possession is used as fictional or negotiated language, with side preference chosen separately."),
+                _item("power_protocol", "Protocol and etiquette", "Titles, rituals, manners, or formal scene structure matter to the dynamic; choose this profile's side separately."),
+                _item("power_training", "Training or improvement arc", "A scene explores practice, discipline, correction, and growth, with side preference chosen separately."),
                 _item("power_trust", "Trust-based vulnerability", "A scene focuses on earned trust, boundaries, and emotional safety."),
             ],
         ),
         PreferenceCategory(
             id="control_themes",
             label="Control Themes",
-            description="Rules, restraint, permission, anticipation, and clearly bounded control.",
+            description="Rules, restraint, permission, anticipation, and clearly bounded control. Choose whether this profile gives control, receives control, or can do either.",
             items=[
-                _item("control_rules", "Structured rules", "The scene uses negotiated rules or rituals as story texture."),
-                _item("control_permission", "Permission and denial", "A character must ask, wait, or earn approval within a negotiated framework."),
-                _item("control_restraint_light", "Light restraint themes", "Limited movement or symbolic restraint adds tension without graphic detail."),
-                _item("control_blindfold", "Blindfold or sensory focus", "Reduced information, trust, or heightened awareness shapes the scene."),
-                _item("control_suspense", "Suspenseful limitations", "Characters navigate constraints, uncertainty, or delayed choices."),
-                _item("control_choice", "Choice under pressure", "A character makes meaningful decisions while boundaries remain respected."),
-                _item("control_confinement_symbolic", "Symbolic confinement", "Locked doors, private rooms, or bounded spaces create narrative pressure."),
-                _item("control_chastity_symbolic", "Symbolic self-control", "Restraint, patience, or delayed gratification is treated as a story motif."),
+                _item("control_rules", "Giving or following structured rules", "The scene uses negotiated rules or rituals as story texture; choose whether this profile sets them, follows them, or can do either."),
+                _item("control_permission", "Permission and approval dynamic", "One side asks, waits, grants, or withholds approval within a negotiated framework."),
+                _item("control_restraint_light", "Light restraint themes", "Limited movement or symbolic restraint adds tension without graphic detail; choose this profile's side separately."),
+                _item("control_blindfold", "Blindfold or sensory focus", "Reduced information, trust, or heightened awareness shapes the scene; choose whether this profile gives, receives, or can do either."),
+                _item("control_suspense", "Suspenseful limitations", "Characters navigate constraints, uncertainty, or delayed choices, with side preference chosen separately."),
+                _item("control_choice", "Choice under pressure", "One side presents meaningful choices while boundaries remain respected; choose this profile's side separately."),
+                _item("control_confinement_symbolic", "Symbolic confinement", "Locked doors, private rooms, or bounded spaces create narrative pressure without implying real-world consent."),
+                _item("control_chastity_symbolic", "Symbolic self-control", "Restraint, patience, or delayed gratification is treated as a story motif, with side preference chosen separately."),
             ],
         ),
         PreferenceCategory(
@@ -87,11 +87,11 @@ def default_categories() -> list[PreferenceCategory]:
         PreferenceCategory(
             id="social_dynamics",
             label="Social Dynamics",
-            description="Partner sharing, group context, visibility, secrecy, rivalry, and negotiated attention.",
+            description="Partner sharing, group context, visibility, secrecy, rivalry, and negotiated attention. Choose this profile's side where a theme has roles.",
             items=[
                 _item("social_partner_sharing", "Partner-sharing themes", "A story explores negotiated attention, trust, and boundaries with others."),
-                _item("social_observation", "Being observed or witnessed", "A scene includes audience awareness, supervision, or being seen in a controlled way."),
-                _item("social_observing", "Observing others", "A character watches, supervises, or witnesses events without taking over the scene."),
+                _item("social_observation", "Being observed or witnessed", "This profile may be the side being seen, supervised, or witnessed in a controlled way."),
+                _item("social_observing", "Observing or witnessing others", "This profile may be the side watching, supervising, or witnessing without taking over the scene."),
                 _item("social_group_scene", "Small-group scene context", "More than two characters are present, with explicit boundaries and roles."),
                 _item("social_rivalry", "Rivalry or competition", "Characters use competition as a source of energy and tension."),
                 _item("social_chosen_circle", "Chosen circle", "A trusted group or community shapes the scene context."),
@@ -132,13 +132,13 @@ def default_categories() -> list[PreferenceCategory]:
         PreferenceCategory(
             id="sensation_play",
             label="Sensation Play",
-            description="Conceptual preferences for tactile intensity, impact, temperature, texture, and sensory contrast.",
+            description="Conceptual preferences for tactile intensity, impact, temperature, texture, and sensory contrast. Choose whether this profile gives, receives, or can do either.",
             items=[
-                _item("sensation_light_touch", "Light sensory teasing", "Gentle or delicate sensation creates anticipation and focus."),
-                _item("sensation_impact_symbolic", "Impact as story texture", "Percussive sensation is referenced conceptually without graphic detail."),
-                _item("sensation_temperature", "Temperature contrast", "Warm, cool, or changing sensations are used as atmosphere."),
-                _item("sensation_texture", "Texture focus", "Fabric, leather, rope, gloves, or other materials shape the scene mood."),
-                _item("sensation_sound", "Sound and rhythm", "Voice, commands, counting, or repeated sounds build tension."),
+                _item("sensation_light_touch", "Light sensory teasing", "Gentle or delicate sensation creates anticipation and focus; choose this profile's side separately."),
+                _item("sensation_impact_symbolic", "Impact as story texture", "Percussive sensation is referenced conceptually without graphic detail; choose this profile's side separately."),
+                _item("sensation_temperature", "Temperature contrast", "Warm, cool, or changing sensations are used as atmosphere; choose this profile's side separately."),
+                _item("sensation_texture", "Texture focus", "Fabric, leather, rope, gloves, or other materials shape the scene mood; choose this profile's side separately."),
+                _item("sensation_sound", "Sound and rhythm", "Voice, commands, counting, or repeated sounds build tension, with side preference chosen separately."),
                 _item("sensation_endurance", "Endurance or intensity arc", "The scene explores rising intensity and clear stopping points."),
             ],
         ),
@@ -177,12 +177,24 @@ def merge_default_categories(profile: UserPreferenceProfile) -> UserPreferencePr
                 existing.items.append(deepcopy(default_item))
                 changed = True
 
-        if not existing.label:
+        if existing.label != default_category.label:
             existing.label = default_category.label
             changed = True
-        if not existing.description:
+        if existing.description != default_category.description:
             existing.description = default_category.description
             changed = True
+
+        existing_items = {item.id: item for item in existing.items}
+        for default_item in default_category.items:
+            existing_item = existing_items.get(default_item.id)
+            if existing_item is None:
+                continue
+            if existing_item.label != default_item.label:
+                existing_item.label = default_item.label
+                changed = True
+            if existing_item.description != default_item.description:
+                existing_item.description = default_item.description
+                changed = True
 
     if changed:
         profile.updatedAt = now_iso()
