@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import random
 
-from schema import ActionResolution, CampaignState
+from schema import ActionResolution, CampaignState, PlayerSlot
 
 RISK_KEYWORDS = (
     "attack", "fight", "strike", "stab", "shoot", "cast", "sneak", "hide",
@@ -23,8 +23,23 @@ STAT_HINTS = (
 )
 
 
-def _best_stat(state: CampaignState, action: str) -> tuple[str, int]:
-    stats = state.player.stats or {}
+def _stats_for_slot(state: CampaignState, player_slot: PlayerSlot | str | None) -> dict[str, int]:
+    if player_slot is None or state.multiplayer is None:
+        return state.player.stats or {}
+    slot_value = player_slot.value if isinstance(player_slot, PlayerSlot) else str(player_slot)
+    if slot_value == PlayerSlot.HOST.value:
+        return state.multiplayer.host_character.stats or {}
+    if slot_value == PlayerSlot.GUEST.value and state.multiplayer.guest_character is not None:
+        return state.multiplayer.guest_character.stats or {}
+    return state.player.stats or {}
+
+
+def _best_stat(
+    state: CampaignState,
+    action: str,
+    player_slot: PlayerSlot | str | None = None,
+) -> tuple[str, int]:
+    stats = _stats_for_slot(state, player_slot)
     lowered = action.lower()
     for keywords, candidates in STAT_HINTS:
         if any(k in lowered for k in keywords):
@@ -42,7 +57,12 @@ def _modifier(stat_value: int) -> int:
     return max(-5, min(10, round((stat_value - 50) / 10)))
 
 
-def resolve_action(state: CampaignState, action: str, roll: int | None = None) -> ActionResolution | None:
+def resolve_action(
+    state: CampaignState,
+    action: str,
+    roll: int | None = None,
+    player_slot: PlayerSlot | str | None = None,
+) -> ActionResolution | None:
     """Return an action check for risky actions, otherwise None."""
     if not state.rules.enabled:
         return None
@@ -51,7 +71,7 @@ def resolve_action(state: CampaignState, action: str, roll: int | None = None) -
     if not any(k in lowered for k in RISK_KEYWORDS):
         return None
 
-    stat, value = _best_stat(state, action)
+    stat, value = _best_stat(state, action, player_slot)
     rolled = roll if roll is not None else random.randint(1, 20)
     modifier = _modifier(value)
     total = rolled + modifier

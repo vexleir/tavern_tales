@@ -58,17 +58,13 @@ async def test_create_join_ready_and_submit_flow(temp_state_dir, new_state):
         await session_manager.submit_action(rt.room_code, PlayerSlot.GUEST, "I go first.")
 
     rt, result = await session_manager.submit_action(rt.room_code, PlayerSlot.HOST, "I open the door.")
-    assert result == "stored"
-    assert rt.status == SessionStatus.GUEST_TURN
-
-    rt, result = await session_manager.submit_action(rt.room_code, PlayerSlot.GUEST, "I hold the lantern.")
     assert result == "ready_to_generate"
     assert rt.status == SessionStatus.GENERATING
-    assert set(rt.pending_actions) == {PlayerSlot.HOST, PlayerSlot.GUEST}
+    assert set(rt.pending_actions) == {PlayerSlot.HOST}
 
     actions = await session_manager.consume_pending_actions(rt.room_code)
     assert actions[PlayerSlot.HOST] == "I open the door."
-    assert actions[PlayerSlot.GUEST] == "I hold the lantern."
+    assert PlayerSlot.GUEST not in actions
 
     rt = await session_manager.begin_next_round(rt.room_code)
     assert rt.turn_number == 1
@@ -76,12 +72,9 @@ async def test_create_join_ready_and_submit_flow(temp_state_dir, new_state):
     assert rt.status == SessionStatus.GUEST_TURN
 
     rt, result = await session_manager.submit_action(rt.room_code, PlayerSlot.GUEST, "I lead this round.")
-    assert result == "stored"
-    assert rt.status == SessionStatus.HOST_TURN
-
-    rt, result = await session_manager.submit_action(rt.room_code, PlayerSlot.HOST, "I follow up.")
     assert result == "ready_to_generate"
     assert rt.status == SessionStatus.GENERATING
+    assert set(rt.pending_actions) == {PlayerSlot.GUEST}
 
 
 @pytest.mark.asyncio
@@ -119,6 +112,76 @@ async def test_disconnect_pauses_and_reconnect_restores(temp_state_dir, new_stat
     assert guest.slot == PlayerSlot.GUEST
     assert rt.status == SessionStatus.HOST_TURN
     assert rt.paused_status_before is None
+
+
+@pytest.mark.asyncio
+async def test_same_guest_client_reclaims_slot_and_stale_close_is_ignored(temp_state_dir, new_state):
+    await state_manager.save_state(new_state("camp_guest_reclaim", player_name="Host Hero"))
+    rt = await session_manager.create_session("camp_guest_reclaim", _host_character())
+    await session_manager.join_session(
+        rt.room_code,
+        websocket=FakeWebSocket(),
+        display_name="Host",
+        character_name="Host Hero",
+        client_id="host-client",
+    )
+    rt, first_guest = await session_manager.join_session(
+        rt.room_code,
+        websocket=FakeWebSocket(),
+        display_name="Guest",
+        character_name="Guest Hero",
+        client_id="guest-client",
+    )
+    old_connection_id = first_guest.connection_id
+    assert first_guest.slot == PlayerSlot.GUEST
+    assert rt.players[PlayerSlot.GUEST].is_connected is True
+
+    rt, replacement_guest = await session_manager.join_session(
+        rt.room_code,
+        websocket=FakeWebSocket(),
+        display_name="Guest",
+        character_name="Guest Hero",
+        client_id="guest-client",
+    )
+    assert replacement_guest.slot == PlayerSlot.GUEST
+    assert replacement_guest.connection_id != old_connection_id
+    assert rt.players[PlayerSlot.GUEST].is_connected is True
+
+    rt = await session_manager.mark_disconnected(
+        rt.room_code,
+        PlayerSlot.GUEST,
+        connection_id=old_connection_id,
+    )
+    assert rt is not None
+    assert rt.players[PlayerSlot.GUEST].is_connected is True
+
+
+@pytest.mark.asyncio
+async def test_disconnected_guest_slot_can_be_claimed_without_desired_slot(temp_state_dir, new_state):
+    state = new_state("camp_claim_disconnected", player_name="Host Hero")
+    state.multiplayer = MultiplayerConfig(
+        room_code="ROOM42",
+        host_character=_host_character(),
+        guest_character=PlayerCharacter(slot=PlayerSlot.GUEST, name="Guest Hero"),
+        session_status=SessionStatus.PAUSED,
+    )
+    await state_manager.save_state(state)
+
+    await session_manager.initialize()
+    rt = await session_manager.get_session("ROOM42")
+    assert rt is not None
+    assert rt.players[PlayerSlot.GUEST].is_connected is False
+
+    rt, guest = await session_manager.join_session(
+        "ROOM42",
+        websocket=FakeWebSocket(),
+        display_name="Guest",
+        character_name="Guest Hero",
+        client_id="fresh-guest-client",
+    )
+    assert guest.slot == PlayerSlot.GUEST
+    assert rt.players[PlayerSlot.GUEST].is_connected is True
+    assert rt.players[PlayerSlot.GUEST].client_id == "fresh-guest-client"
 
 
 @pytest.mark.asyncio

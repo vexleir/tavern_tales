@@ -44,31 +44,26 @@ Host Machine:
 
 No new servers. No accounts. The host's existing FastAPI instance gains WebSocket support and a session manager. The guest opens a browser and connects directly. Tunnel solutions work transparently — WebSocket and REST endpoints don't need code changes for internet mode.
 
-### Sequential Turn Flow (the canonical round)
+### Sequential Turn Flow (canonical)
 
 ```
-Round N starts (active_slot = host on round 1, alternates each round)
+Turn N starts (active_slot = host on turn 0, alternates after every AI response)
 
   Active player has the floor:
     - Their input box is unlocked, they type their action
     - Other player sees: "{ActiveName} is composing..."
     - Active player submits
       → Their action is stored privately on the server
-      → Floor passes to the other player
-      → Other player sees: "{ActiveName} submitted. Your turn."
 
-  Now-active player has the floor:
-    - Same as above, mirrored
-    - On submit, both actions are now collected
-
-  → AI generates with both actions combined as the user message
+  → AI generates from that single attributed action
   → Tokens stream to BOTH players in real time (identical broadcast)
-  → AI completes, turn_id assigned, side effects applied per player
+  → AI completes, turn_id assigned, side effects applied to the acting player
 
-Round N+1 starts (active_slot flips to the other player)
+Turn N+1 starts (active_slot flips to the other player)
 ```
 
-Neither player ever sees the other's submitted text. The "Partner submitted" indicator carries no content. The AI sees both actions combined into one user message (see Phase 4).
+The AI sees one attributed player action at a time, creating a "yes, and" cadence:
+Player 1 prompt → AI response → Player 2 prompt → AI response.
 
 ---
 
@@ -111,7 +106,7 @@ class SessionState(BaseModel):
     players: dict[str, ConnectedPlayer]              # keyed by slot
     pending_actions: dict[str, PendingAction]        # keyed by slot
     turn_number: int = 0
-    starting_slot_this_round: PlayerSlot = PlayerSlot.HOST  # alternates each round
+    starting_slot_this_round: PlayerSlot = PlayerSlot.HOST  # active slot marker
     paused_since: datetime | None = None
     paused_status_before: SessionStatus | None = None       # state to restore on reconnect
     created_at: datetime
@@ -168,10 +163,9 @@ WS /api/session/{room_code}/ws
 | `player_ready` | All | `slot`, `is_ready` | Ready toggled |
 | `floor_passed` | All | `active_slot` | Whose turn it is now |
 | `partner_composing` | Inactive slot only | `active_slot` | Partner is typing (no content) |
-| `partner_submitted` | Inactive slot only | `active_slot` | Partner committed their action |
 | `generation_start` | All | `turn_number` | AI beginning to generate |
 | `token` | All | `text` | Streaming token (identical broadcast) |
-| `generation_done` | All | `turn_number`, `turn_id`, `next_active_slot` | Round complete; alternating starter |
+| `generation_done` | All | `turn_number`, `turn_id`, `next_active_slot` | AI turn complete; floor passes |
 | `ooc_message` | All | `slot`, `display_name`, `text` | OOC chat |
 | `session_paused` | All | `disconnected_slot`, `reconnect_deadline` | Player dropped |
 | `session_resumed` | All | `slot` | Player reconnected within window |
@@ -263,10 +257,10 @@ Schema v2 does not auto-migrate. Existing single-player campaigns continue to wo
 
 ```
 LOBBY
-  └─ both players Ready? → HOST_TURN [round 0]
+  └─ both players Ready? → HOST_TURN [turn 0]
 
 HOST_TURN
-  ├─ host submit_action → store, transition → GUEST_TURN
+  ├─ host submit_action → store, transition → GENERATING
   └─ guest submit_action → REJECTED (not your turn)
 
 GUEST_TURN
@@ -275,8 +269,8 @@ GUEST_TURN
 
 GENERATING
   └─ AI complete → clear pending_actions
-                 → flip starting_slot_this_round
-                 → status = (next round's first slot)_TURN
+                 → flip active slot
+                 → status = (other slot)_TURN
 
 [during HOST_TURN | GUEST_TURN | GENERATING]
   └─ player disconnect → save status, transition → PAUSED
@@ -292,20 +286,20 @@ ARCHIVED
   └─ host delete_session → fully removed
 ```
 
-`starting_slot_this_round` flips each round so neither player is permanently first. Round 1: host first. Round 2: guest first. Round 3: host first. And so on.
+`starting_slot_this_round` is now the active slot marker and flips after every AI response. Turn 0: host. Turn 1: guest. Turn 2: host. And so on.
 
-### 6.2 New function in `backend/main.py`: `_run_multiplayer_turn(session, campaign_id, host_action, guest_action)`
+### 6.2 New function in `backend/main.py`: `_run_multiplayer_turn(room_code)`
 
 1. Acquire `state_manager.turn_lock(campaign_id)` — same exclusive write lock as single-player.
 2. Load current `CampaignState`.
-3. Append a combined user `Message` (Phase 4 specifies the format); attribute `player_slot=None` (combined turn).
+3. Append one attributed user `Message` for the acting slot.
 4. Call `prompt_builder.build_prompt()` with the multiplayer flag — emits the new PARTY block and merged preference context.
 5. Stream tokens from Ollama. For each token, call `session_manager.broadcast(room_code, {type: "token", text: token})` — both clients receive the same token in the same order.
 6. On stream complete:
    - Append assistant `Message` with the streamed content
-   - Run `_background_after_turn()` — extraction now produces two `StateDelta` objects (one per player) by parsing actions per character. Reversals are stored per slot in `MessageSideEffects`.
+   - Run multiplayer postprocessing for the acting slot. Reversal is stored with that slot in `MessageSideEffects`.
 7. Reset `pending_actions = {}`.
-8. Flip `starting_slot_this_round`. Transition `status` to that slot's `_TURN`.
+8. Flip the active slot. Transition `status` to that slot's `_TURN`.
 9. Broadcast `generation_done` with `next_active_slot`.
 
 ### 6.3 Race conditions and safety
@@ -353,17 +347,15 @@ Appearance: {appearance}
 Stats: {stats} | Inventory: {inventory}
 ```
 
-### 7.2 Combined user message format
+### 7.2 Attributed user message format
 
-Each round produces a single user `Message` whose content combines both players' submitted actions:
+Each multiplayer AI turn produces a single user `Message` for the acting player:
 
 ```
-[{HOST_CHARACTER_NAME}]: {host_action_text}
-
-[{GUEST_CHARACTER_NAME}]: {guest_action_text}
+[{ACTING_CHARACTER_NAME}]: {action_text}
 ```
 
-The action order in the prompt always follows `starting_slot_this_round` for that round (the player who had the floor first appears first). This gives the AI a consistent "left-to-right" reading order without exposing it to either player.
+The next player responds to the AI's latest narration, preserving a turn-by-turn "yes, and" flow.
 
 ### 7.3 Token budgeting
 
@@ -373,8 +365,8 @@ Each character block is estimated and tracked in `BlockTokens` the same way the 
 
 The privacy boundary is enforced at the WebSocket broadcast layer, not the prompt layer:
 
-- `submit_action` text is **never** included in any `partner_submitted` or `partner_composing` broadcast.
-- The combined user message exists in the `messages` list inside `CampaignState`, so anyone with director-mode or `/api/state/{id}` access can see it. This is intentional — the host is the campaign owner. Guests have **no** access to raw state, only WS broadcasts.
+- `submit_action` text is **never** included in any `partner_composing` broadcast.
+- The attributed user message exists in the `messages` list inside `CampaignState`, so anyone with director-mode or `/api/state/{id}` access can see it. This is intentional — the host is the campaign owner. Guests have **no** access to raw state, only WS broadcasts.
 - The `/api/state/{id}` endpoint should reject GET requests from non-host slots in multiplayer sessions (new authorization check).
 
 ---
@@ -464,13 +456,13 @@ Renders the in-game view. Either replaces or wraps the existing `App.jsx` chat v
 | `HOST_TURN` and you are guest | Locked | "{HostCharName} is composing..." |
 | `GUEST_TURN` and you are guest | Enabled | "Your turn — type your action" |
 | `GUEST_TURN` and you are host | Locked | "{GuestCharName} is composing..." |
-| `GENERATING` | Locked | "Both players submitted — AI is writing..." |
+| `GENERATING` | Locked | "AI is writing..." |
 | `PAUSED` | Locked | "Partner disconnected — waiting up to {N}m" |
 
 **Turn indicator** (top of chat):
-- `Round 1 — {Name}'s turn`
-- `Round 1 — AI is writing...`
-- `Round 2 — {Name}'s turn` (alternating starter)
+- `Turn 1 — {Name}'s turn`
+- `Turn 1 — AI is writing...`
+- `Turn 2 — {Name}'s turn`
 
 **Player roster panel** (collapsible sidebar):
 - Both players: avatar, character name, display name, connection dot (green/red), Ready checkmark
@@ -562,9 +554,8 @@ The guest uses the tunnel URL instead of the LAN IP. **No code changes required*
 - Create session, generate unique room codes (test collision avoidance)
 - Join first player → slot = "host"; join second → slot = "guest"; join third → rejected
 - `submit_action` from non-active slot → rejected with `not_your_turn`
-- Submit host action → status transitions to `GUEST_TURN`
-- Submit guest action → status transitions to `GENERATING`
-- After generation → `starting_slot_this_round` flips
+- Submit active action → status transitions to `GENERATING`
+- After generation → active slot flips and status transitions to the other player's `_TURN`
 - Disconnect during `GUEST_TURN` → status = `PAUSED`, `paused_status_before = GUEST_TURN`
 - Reconnect within window → status restored
 - Reconnect after window expires → host receives `host_action_required`
@@ -572,8 +563,7 @@ The guest uses the tunnel URL instead of the LAN IP. **No code changes required*
 **`backend/tests/test_multiplayer_prompt.py`**
 - Multiplayer campaign state → `PARTY` block present in system prompt
 - Both character sections (host + guest) appear with correct names, stats, inventory
-- Combined user message format `[Name]: text` for both players
-- Action order matches `starting_slot_this_round`
+- Attributed user message format `[Name]: text` for the acting player
 - Merged preference block appears
 - Single-player campaign → `PARTY` block absent (regression check on `test_second_turn_prompt_contains_world`)
 
@@ -588,13 +578,13 @@ The guest uses the tunnel URL instead of the LAN IP. **No code changes required*
 - Context filter: items marked `ai` only do not appear in merged output
 
 **`backend/tests/test_multiplayer_chat_flow.py`**
-- End-to-end: create session → both join → both ready → simulate action submissions → mock Ollama stream → verify token broadcasts → verify combined user message stored → verify state delta applied per slot
+- End-to-end: create session → both join → both ready → host submits → mock Ollama stream → verify token broadcasts → verify attributed user message stored → verify state delta applied to host → guest submits next turn → verify floor alternates
 
 ### 11.2 Manual QA checklist
 
 Two browser windows, one at `localhost:5173` (host) and one at `{host_ip}:5173` (guest, ideally a second device on same LAN).
 
-- **Happy path**: create session → guest joins → both fill in characters → both ready → host turn → submit → guest turn → submit → AI streams to both → next round starts with guest first
+- **Happy path**: create session → guest joins → both fill in characters → both ready → host turn → submit → AI streams to both → guest turn → submit → AI streams to both → host turn resumes
 - **Privacy check**: confirm guest never sees host's submitted text in any UI surface, network response, or WS message
 - **OOC chat**: messages appear in both clients; do not appear in narrative; not persisted after session ends
 - **Joint action**: both players use joint action button → AI receives "We act together"

@@ -15,9 +15,8 @@ Persistence model:
 
 Turn flow (sequential):
     LOBBY → both ready → HOST_TURN
-    *_TURN + first player submits → other *_TURN
-    *_TURN + second player submits → GENERATING (caller invokes the chat handler)
-    GENERATING + generation_done() → flip starting_slot → next *_TURN
+    *_TURN + active player submits → GENERATING (caller invokes the chat handler)
+    GENERATING + generation_done() → flip active slot → next *_TURN
     Disconnect at any non-LOBBY status → PAUSED, save status_before
     Reconnect within window → restore status_before
 """
@@ -71,6 +70,7 @@ class ConnectedPlayer:
     display_name: str
     character_name: str
     connection_id: str
+    client_id: str = ""
     is_ready: bool = False
     is_connected: bool = True
     preference_profile_json: dict[str, Any] | None = None
@@ -308,6 +308,7 @@ async def join_session(
     websocket: WebSocket,
     display_name: str,
     character_name: str,
+    client_id: str = "",
     preference_profile_json: dict[str, Any] | None = None,
     preference_source: str = "none",
     desired_slot: PlayerSlot | None = None,
@@ -325,15 +326,35 @@ async def join_session(
         if rt.status == SessionStatus.ARCHIVED:
             raise ValueError("session is archived")
 
+        normalized_client_id = (client_id or "").strip()[:120]
+
         # Reconnect path: same slot already known, just replace the WS.
         if desired_slot is not None and desired_slot in rt.players:
             existing = rt.players[desired_slot]
             existing.is_connected = True
             existing.connection_id = uuid4().hex[:12]
+            if normalized_client_id:
+                existing.client_id = normalized_client_id
             rt.connections[desired_slot] = websocket
             await _maybe_resume_from_pause(rt)
             rt.touch()
             return rt, existing
+
+        # Same browser/device rejoining without a known slot. This covers
+        # refreshes, temporary network drops, and React dev StrictMode's
+        # mount/unmount/remount cycle without opening a fake "third player".
+        if normalized_client_id:
+            for existing_slot, existing in rt.players.items():
+                if existing.client_id == normalized_client_id:
+                    existing.is_connected = True
+                    existing.connection_id = uuid4().hex[:12]
+                    existing.display_name = (display_name or existing.display_name).strip()[:80] or existing.display_name
+                    existing.character_name = (character_name or existing.character_name).strip()[:80] or existing.character_name
+                    rt.connections[existing_slot] = websocket
+                    await _sync_character_to_campaign(rt, existing_slot, existing.character_name)
+                    await _maybe_resume_from_pause(rt)
+                    rt.touch()
+                    return rt, existing
 
         # New player. Decide slot.
         if desired_slot is None:
@@ -342,7 +363,28 @@ async def join_session(
             slot = desired_slot
 
         if slot in rt.players:
-            raise ValueError(f"slot {slot.value!r} already taken")
+            existing = rt.players[slot]
+            same_legacy_guest = (
+                slot == PlayerSlot.GUEST
+                and not existing.client_id
+                and (display_name or "").strip()[:80] == existing.display_name
+                and (character_name or "").strip()[:80] == existing.character_name
+            )
+            if existing.is_connected and not same_legacy_guest:
+                raise ValueError(f"slot {slot.value!r} already taken")
+            existing.is_connected = True
+            existing.connection_id = uuid4().hex[:12]
+            if normalized_client_id:
+                existing.client_id = normalized_client_id
+            existing.display_name = (display_name or existing.display_name).strip()[:80] or existing.display_name
+            existing.character_name = (character_name or existing.character_name).strip()[:80] or existing.character_name
+            existing.preference_profile_json = preference_profile_json or existing.preference_profile_json
+            existing.preference_source = preference_source if preference_profile_json else existing.preference_source
+            rt.connections[slot] = websocket
+            await _sync_character_to_campaign(rt, slot, existing.character_name)
+            await _maybe_resume_from_pause(rt)
+            rt.touch()
+            return rt, existing
         if slot == PlayerSlot.GUEST and PlayerSlot.HOST not in rt.players:
             raise ValueError("host must join before guest")
 
@@ -359,6 +401,7 @@ async def join_session(
             display_name=(display_name or slot.value).strip()[:80] or slot.value,
             character_name=(character_name or "").strip()[:80] or "Unnamed",
             connection_id=uuid4().hex[:12],
+            client_id=normalized_client_id,
             preference_profile_json=preference_profile_json,
             preference_source=preference_source if preference_profile_json else "none",
         )
@@ -505,13 +548,21 @@ async def set_ready(room_code: str, slot: PlayerSlot, is_ready: bool) -> Session
         return rt
 
 
-async def mark_disconnected(room_code: str, slot: PlayerSlot) -> SessionRuntime | None:
+async def mark_disconnected(
+    room_code: str,
+    slot: PlayerSlot,
+    connection_id: str | None = None,
+) -> SessionRuntime | None:
     rt = await get_session(room_code)
     if rt is None:
         return None
     async with rt.lock:
         cp = rt.players.get(slot)
         if cp is None:
+            return rt
+        if connection_id is not None and cp.connection_id != connection_id:
+            # A stale socket closed after the slot was replaced by a newer
+            # connection. Do not mark the active replacement as disconnected.
             return rt
         cp.is_connected = False
         rt.connections.pop(slot, None)
@@ -560,8 +611,7 @@ async def submit_action(
     """Record an action submission and advance the turn state machine.
 
     Returns the runtime and a status code:
-        "stored"            — action recorded, waiting on partner
-        "ready_to_generate" — both actions present, caller should kick off the AI turn
+        "ready_to_generate" — action recorded, caller should kick off the AI turn
     Raises ValueError if the submission is rejected (wrong slot, generating, etc.)
     """
     rt = await get_session(room_code)
@@ -588,6 +638,9 @@ async def submit_action(
         if active is None or slot != active:
             raise ValueError("not your turn")
 
+        # Multiplayer turns are sequential: one player submits, the GM responds,
+        # then the floor passes to the other player.
+        rt.pending_actions.clear()
         rt.pending_actions[slot] = PendingAction(
             slot=slot,
             text=text,
@@ -595,21 +648,9 @@ async def submit_action(
         )
         rt.touch()
 
-        # Advance the state machine. The starter alternates each round, so the
-        # second submission is detected by both slots being present rather than
-        # by a hard-coded HOST -> GUEST ordering.
-        if PlayerSlot.HOST in rt.pending_actions and PlayerSlot.GUEST in rt.pending_actions:
-            rt.status = SessionStatus.GENERATING
-            await _persist_session_status(rt)
-            return rt, "ready_to_generate"
-
-        rt.status = (
-            SessionStatus.GUEST_TURN
-            if slot == PlayerSlot.HOST
-            else SessionStatus.HOST_TURN
-        )
+        rt.status = SessionStatus.GENERATING
         await _persist_session_status(rt)
-        return rt, "stored"
+        return rt, "ready_to_generate"
 
 
 def _expected_active_slot(status: SessionStatus) -> PlayerSlot | None:
@@ -626,7 +667,7 @@ def current_active_slot(rt: SessionRuntime) -> PlayerSlot | None:
 
 
 async def consume_pending_actions(room_code: str) -> dict[PlayerSlot, str]:
-    """Snapshot and clear the pending actions for the current round."""
+    """Snapshot and clear the pending action for the current turn."""
     rt = await get_session(room_code)
     if rt is None:
         raise ValueError("session not found")
@@ -638,12 +679,12 @@ async def consume_pending_actions(room_code: str) -> dict[PlayerSlot, str]:
 
 
 async def begin_next_round(room_code: str) -> SessionRuntime:
-    """Called after generation completes — flips starter and re-enters collection."""
+    """Called after generation completes — passes the floor to the other player."""
     rt = await get_session(room_code)
     if rt is None:
         raise ValueError("session not found")
     async with rt.lock:
-        # Flip the starter for the next round.
+        # Flip the active slot for the next turn.
         rt.turn_number += 1
         rt.starting_slot_this_round = (
             PlayerSlot.GUEST if rt.starting_slot_this_round == PlayerSlot.HOST else PlayerSlot.HOST

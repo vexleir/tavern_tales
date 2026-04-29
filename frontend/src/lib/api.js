@@ -13,11 +13,7 @@ function resolveApiBase() {
   if (configured) {
     try {
       const parsed = new URL(configured, window.location.origin);
-      if (!isPrivateIp(parsed.hostname)) {
-        console.warn(`Ignoring non-local VITE_API_BASE (${parsed.origin}); deriving from window.location instead.`);
-      } else {
-        return parsed.origin;
-      }
+      return parsed.origin;
     } catch {
       // fall through to window.location-based default
     }
@@ -28,7 +24,7 @@ function resolveApiBase() {
   // backend at http://192.168.1.5:8000 without extra configuration.
   try {
     const here = new URL(window.location.origin);
-    if (isPrivateIp(here.hostname)) {
+    if (isPrivateIp(here.hostname) || here.protocol === 'http:') {
       return `${here.protocol}//${here.hostname}:8000`;
     }
   } catch {

@@ -112,7 +112,7 @@ async def request_id_middleware(request, call_next):
         response.headers["Content-Security-Policy"] = (
             "default-src 'self'; "
             "connect-src 'self' http://localhost:* http://127.0.0.1:* http://[::1]:* "
-            "ws://localhost:* ws://127.0.0.1:* ws://[::1]:*; "
+            "http://*:8000 ws://localhost:* ws://127.0.0.1:* ws://[::1]:* ws://*:8000; "
             "img-src 'self' data: blob:; "
             "style-src 'self' 'unsafe-inline'; "
             "script-src 'self'; "
@@ -824,11 +824,15 @@ def _host_character_from_state(
 
 def _session_join_url(request: Request, room_code: str) -> str:
     lan_ip = _detect_lan_ip()
-    host = request.headers.get("host", "")
-    port = "8000"
-    if ":" in host and not host.startswith("["):
-        port = host.rsplit(":", 1)[1]
-    return f"http://{lan_ip}:{port}/?room_code={room_code}"
+    origin = request.headers.get("origin", "")
+    scheme = "http"
+    port = "5173"
+    if origin:
+        with suppress(ValueError):
+            parsed = httpx.URL(origin)
+            scheme = parsed.scheme or scheme
+            port = str(parsed.port or (443 if parsed.scheme == "https" else 80))
+    return f"{scheme}://{lan_ip}:{port}/?room_code={room_code}"
 
 
 def _profile_from_json(raw: dict[str, Any] | None) -> UserPreferenceProfile | None:
@@ -1033,6 +1037,7 @@ async def multiplayer_session_ws(websocket: WebSocket, room_code: str):
     await websocket.accept()
     rt: session_manager.SessionRuntime | None = None
     player_slot: PlayerSlot | None = None
+    player_connection_id: str | None = None
 
     try:
         first = await websocket.receive_json()
@@ -1058,6 +1063,7 @@ async def multiplayer_session_ws(websocket: WebSocket, room_code: str):
                 websocket=websocket,
                 display_name=str(first.get("display_name") or ""),
                 character_name=str(first.get("character_name") or ""),
+                client_id=str(first.get("client_id") or ""),
                 preference_profile_json=preference_profile,
                 preference_source=str(first.get("preference_source") or "none"),
                 desired_slot=desired_slot,
@@ -1068,6 +1074,14 @@ async def multiplayer_session_ws(websocket: WebSocket, room_code: str):
             return
 
         player_slot = player.slot
+        player_connection_id = player.connection_id
+        await websocket.send_json({
+            "type": "slot_assigned",
+            "slot": player_slot.value,
+            "display_name": player.display_name,
+            "character_name": player.character_name,
+            "connection_id": player_connection_id,
+        })
         await _refresh_merged_preferences(rt)
         if msg_type == "reconnect":
             await session_manager.broadcast(rt, {"type": "session_resumed", "slot": player_slot.value})
@@ -1113,7 +1127,7 @@ async def multiplayer_session_ws(websocket: WebSocket, room_code: str):
 
             elif msg_type == "submit_action":
                 try:
-                    rt, result = await session_manager.submit_action(
+                    rt, _result = await session_manager.submit_action(
                         rt.room_code,
                         player_slot,
                         str(incoming.get("text") or ""),
@@ -1122,25 +1136,19 @@ async def multiplayer_session_ws(websocket: WebSocket, room_code: str):
                     await _send_ws_error(websocket, str(e), "not_your_turn" if "not your turn" in str(e) else "submit_failed")
                     continue
 
-                await session_manager.broadcast_except(
+                player = rt.players.get(player_slot)
+                await session_manager.broadcast(
                     rt,
-                    player_slot,
-                    {"type": "partner_submitted", "active_slot": player_slot.value},
+                    {
+                        "type": "generation_start",
+                        "turn_number": rt.turn_number,
+                        "acting_slot": player_slot.value,
+                        "actor_name": player.character_name if player else player_slot.value.title(),
+                    },
                 )
-                active = session_manager.current_active_slot(rt)
-                if result == "ready_to_generate":
-                    await session_manager.broadcast(
-                        rt,
-                        {"type": "generation_start", "turn_number": rt.turn_number},
-                    )
-                    # Spawn the AI turn so the WS remains responsive to OOC and
-                    # disconnect events while the model is generating.
-                    asyncio.create_task(_run_multiplayer_turn(rt.room_code))
-                else:
-                    await session_manager.broadcast(
-                        rt,
-                        {"type": "floor_passed", "active_slot": active.value if active else None},
-                    )
+                # Spawn the AI turn so the WS remains responsive to OOC and
+                # disconnect events while the model is generating.
+                asyncio.create_task(_run_multiplayer_turn(rt.room_code))
                 await _broadcast_session_state(rt)
 
             elif msg_type == "composing":
@@ -1214,7 +1222,11 @@ async def multiplayer_session_ws(websocket: WebSocket, room_code: str):
 
     except WebSocketDisconnect:
         if rt is not None and player_slot is not None:
-            paused = await session_manager.mark_disconnected(rt.room_code, player_slot)
+            paused = await session_manager.mark_disconnected(
+                rt.room_code,
+                player_slot,
+                connection_id=player_connection_id,
+            )
             if paused is not None:
                 deadline = None
                 if paused.paused_since is not None:
@@ -1415,12 +1427,12 @@ async def _run_chat_stream(
 
 async def _background_after_multiplayer_turn(
     campaign_id: str,
-    host_action: str,
-    guest_action: str,
+    acting_slot: PlayerSlot,
+    action_text: str,
     gm_msg_id: str,
     gm_text: str,
 ) -> None:
-    """Per-slot extraction + memory + summary cadence for a multiplayer round."""
+    """Slot-aware extraction + memory + summary cadence for a multiplayer turn."""
     campaign_id_ctx.set(campaign_id)
 
     gm_excerpt = gm_text.strip()
@@ -1435,17 +1447,17 @@ async def _background_after_multiplayer_turn(
 
         try:
             mp = state.multiplayer
-            host_name = mp.host_character.name if mp is not None else "Host"
-            guest_name = (
-                mp.guest_character.name
-                if mp is not None and mp.guest_character is not None
-                else "Guest"
-            )
-            host_loc = mp.host_character.location if mp is not None else state.player.location
+            if mp is not None and acting_slot == PlayerSlot.HOST:
+                actor = mp.host_character
+            elif mp is not None and mp.guest_character is not None:
+                actor = mp.guest_character
+            else:
+                actor = None
+            actor_name = actor.name if actor is not None and actor.name else acting_slot.value.title()
+            actor_loc = actor.location if actor is not None else state.player.location
             mem_content = (
                 "Multiplayer event memory\n"
-                f"{host_name} action: {host_action}\n"
-                f"{guest_name} action: {guest_action}\n"
+                f"{actor_name} action: {action_text}\n"
                 f"Outcome: {gm_excerpt}"
             )
             mem_id = memory.add_memory(
@@ -1454,22 +1466,15 @@ async def _background_after_multiplayer_turn(
                 mem_content,
                 turn=len(state.messages),
                 kind="event",
-                location=host_loc,
+                location=actor_loc,
             )
             side.memory_ids.append(mem_id)
 
-            host_delta = await extraction.extract_state_changes_for_slot(
-                state, PlayerSlot.HOST, host_action, gm_text
+            delta = await extraction.extract_state_changes_for_slot(
+                state, acting_slot, action_text, gm_text
             )
-            host_reversal = state_manager.apply_state_delta(state, host_delta, PlayerSlot.HOST)
-            side.reversal = ReversalPatch.model_validate(host_reversal)
-
-            if mp is not None and mp.guest_character is not None:
-                guest_delta = await extraction.extract_state_changes_for_slot(
-                    state, PlayerSlot.GUEST, guest_action, gm_text
-                )
-                guest_reversal = state_manager.apply_state_delta(state, guest_delta, PlayerSlot.GUEST)
-                side.extra_reversals.append(ReversalPatch.model_validate(guest_reversal))
+            reversal = state_manager.apply_state_delta(state, delta, acting_slot)
+            side.reversal = ReversalPatch.model_validate(reversal)
 
             await summarizer.maybe_summarize(state)
             side.status = "complete"
@@ -1495,10 +1500,10 @@ async def _background_after_multiplayer_turn(
 async def _run_multiplayer_turn(room_code: str) -> None:
     """Drive one full AI turn for a multiplayer session.
 
-    Triggered by the WS handler after both players have submitted. Acquires the
-    campaign turn lock, builds the combined prompt, streams tokens to all
-    connected clients, and persists results. On completion, advances the
-    session to the next round.
+    Triggered by the WS handler after the active player submits. Acquires the
+    campaign turn lock, builds an attributed prompt, streams tokens to all
+    connected clients, and persists results. On completion, passes the floor to
+    the other player.
     """
     rt = await session_manager.get_session(room_code)
     if rt is None:
@@ -1509,16 +1514,16 @@ async def _run_multiplayer_turn(room_code: str) -> None:
     campaign_id_ctx.set(campaign_id)
 
     actions = await session_manager.consume_pending_actions(room_code)
-    host_action = actions.get(PlayerSlot.HOST, "")
-    guest_action = actions.get(PlayerSlot.GUEST, "")
-    if not host_action or not guest_action:
-        log.warning("Multiplayer turn started without both actions; aborting.")
+    if len(actions) != 1:
+        log.warning("Multiplayer turn started with %s pending actions; aborting.", len(actions))
         await session_manager.broadcast(
             rt,
-            {"type": "error", "message": "missing one or both player actions", "code": "missing_actions"},
+            {"type": "error", "message": "missing player action", "code": "missing_actions"},
         )
         await session_manager.begin_next_round(room_code)
         return
+    acting_slot, action_text = next(iter(actions.items()))
+    actor_name: str | None = None
 
     async with state_manager.turn_lock(campaign_id):
         state = await state_manager.load_state(campaign_id)
@@ -1530,27 +1535,36 @@ async def _run_multiplayer_turn(room_code: str) -> None:
             return
 
         mp = state.multiplayer
-        host_name = mp.host_character.name or "Host"
-        guest_name = (mp.guest_character.name if mp.guest_character is not None else "Guest")
-        starter = rt.starting_slot_this_round.value
-
-        combined = prompt_builder.format_multiplayer_user_message(
-            host_name=host_name,
-            host_action=host_action,
-            guest_name=guest_name,
-            guest_action=guest_action,
-            starter_slot=starter,
+        actor = (
+            mp.host_character
+            if acting_slot == PlayerSlot.HOST
+            else mp.guest_character
+        )
+        actor_name = actor.name if actor is not None and actor.name else acting_slot.value.title()
+        next_slot = PlayerSlot.GUEST if acting_slot == PlayerSlot.HOST else PlayerSlot.HOST
+        next_actor = (
+            mp.host_character
+            if next_slot == PlayerSlot.HOST
+            else mp.guest_character
+        )
+        next_actor_name = (
+            next_actor.name
+            if next_actor is not None and next_actor.name
+            else next_slot.value.title()
+        )
+        user_message = prompt_builder.format_multiplayer_turn_message(
+            actor_name,
+            action_text,
+            next_actor_name=next_actor_name,
         )
 
-        memories = memory.retrieve_relevant_memories(campaign_id, combined, n_results=4)
-        # game_rules.resolve_action runs against the host character today; in v1
-        # we let it derive a single resolution from the combined text.
-        action_resolution = game_rules.resolve_action(state, combined)
+        memories = memory.retrieve_relevant_memories(campaign_id, user_message, n_results=4)
+        action_resolution = game_rules.resolve_action(state, user_message, player_slot=acting_slot)
         turn_context = game_rules.render_resolution(action_resolution)
 
         built = prompt_builder.build_prompt(
             state=state,
-            user_message=combined,
+            user_message=user_message,
             retrieved_memories=memories,
             turn_context=turn_context,
         )
@@ -1598,22 +1612,12 @@ async def _run_multiplayer_turn(room_code: str) -> None:
             async def _persist(st: CampaignState) -> CampaignState:
                 import schema as _schema
 
-                # Two attributed user messages share the turn_id so the existing
-                # delete-by-turn semantics still cleanly remove the whole round.
                 st.messages.append(
                     _schema.Message(
                         turn_id=turn_id,
                         role=Role.USER,
-                        content=host_action,
-                        player_slot="host",
-                    )
-                )
-                st.messages.append(
-                    _schema.Message(
-                        turn_id=turn_id,
-                        role=Role.USER,
-                        content=guest_action,
-                        player_slot="guest",
+                        content=user_message,
+                        player_slot=acting_slot.value,
                     )
                 )
                 gm_msg = _schema.Message(
@@ -1621,13 +1625,14 @@ async def _run_multiplayer_turn(room_code: str) -> None:
                     role=Role.ASSISTANT,
                     content=gm_text,
                     partial=partial,
+                    player_slot=acting_slot.value,
                 )
                 st.messages.append(gm_msg)
                 st.side_effects.setdefault(gm_msg.id, MessageSideEffects(status="pending"))
                 state_manager.record_event(
                     st,
                     "turn.multiplayer.complete",
-                    f"Multiplayer round {rt.turn_number} saved (msg={gm_msg.id}, stop={stop_reason}).",
+                    f"Multiplayer turn {rt.turn_number} saved (msg={gm_msg.id}, stop={stop_reason}).",
                 )
                 return st
 
@@ -1646,6 +1651,8 @@ async def _run_multiplayer_turn(room_code: str) -> None:
             "gm_msg_id": gm_msg_id,
             "stop_reason": stop_reason,
             "partial": partial,
+            "acting_slot": acting_slot.value,
+            "actor_name": actor_name or acting_slot.value.title(),
             "next_active_slot": next_active.value if next_active else None,
         },
     )
@@ -1655,8 +1662,8 @@ async def _run_multiplayer_turn(room_code: str) -> None:
         asyncio.create_task(
             _background_after_multiplayer_turn(
                 campaign_id=campaign_id,
-                host_action=host_action,
-                guest_action=guest_action,
+                acting_slot=acting_slot,
+                action_text=action_text,
                 gm_msg_id=gm_msg_id,
                 gm_text=gm_text,
             )

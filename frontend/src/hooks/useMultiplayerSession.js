@@ -3,6 +3,42 @@ import { wsUrl } from '../lib/api';
 
 const RECONNECT_DELAYS_MS = [500, 1000, 2000, 4000, 8000];
 
+function storageKey(roomCode, suffix) {
+  return `tt_mp_${roomCode}_${suffix}`;
+}
+
+function getOrCreateClientId(roomCode) {
+  if (typeof window === 'undefined') return '';
+  const key = storageKey(roomCode, 'client_id');
+  try {
+    const existing = window.sessionStorage?.getItem(key) || window.localStorage?.getItem(key);
+    if (existing) return existing;
+    const generated = `client_${Date.now()}_${Math.random().toString(36).slice(2, 10)}`;
+    window.sessionStorage?.setItem(key, generated);
+    return generated;
+  } catch {
+    return `client_${Date.now()}_${Math.random().toString(36).slice(2, 10)}`;
+  }
+}
+
+function loadAssignedSlot(roomCode) {
+  if (typeof window === 'undefined') return null;
+  try {
+    return window.sessionStorage?.getItem(storageKey(roomCode, 'slot')) || null;
+  } catch {
+    return null;
+  }
+}
+
+function saveAssignedSlot(roomCode, slot) {
+  if (!slot || typeof window === 'undefined') return;
+  try {
+    window.sessionStorage?.setItem(storageKey(roomCode, 'slot'), slot);
+  } catch {
+    // Storage may be unavailable in privacy mode; the in-memory ref still works.
+  }
+}
+
 const initialState = {
   status: 'connecting', // connecting | open | closed | error
   reconnectAttempt: 0,
@@ -15,10 +51,11 @@ const initialState = {
   mergedPreferences: null,
   mergedPreferenceSummary: null,
   liveAssistantText: '',     // streaming buffer for current AI turn
+  currentGeneration: null,   // {slot, actorName} for the active AI response
+  lastCompletedGeneration: null,
   generating: false,
   oocMessages: [],           // {slot, display_name, text, ts}
   partnerComposing: false,
-  partnerSubmittedThisRound: false,
   lastError: null,           // banner-style transient error
   archivedReason: null,
   ejectedSlot: null,
@@ -57,8 +94,12 @@ function reducer(state, action) {
       return {
         ...state,
         liveAssistantText: '',
+        currentGeneration: {
+          slot: action.actingSlot || null,
+          actorName: action.actorName || '',
+        },
+        lastCompletedGeneration: null,
         generating: true,
-        partnerSubmittedThisRound: false,
         partnerComposing: false,
       };
     case 'generation_done':
@@ -66,13 +107,15 @@ function reducer(state, action) {
         ...state,
         generating: false,
         liveAssistantText: '',
-        partnerSubmittedThisRound: false,
+        lastCompletedGeneration: {
+          slot: action.actingSlot || state.currentGeneration?.slot || null,
+          actorName: action.actorName || state.currentGeneration?.actorName || '',
+        },
+        currentGeneration: null,
         partnerComposing: false,
       };
     case 'partner_composing':
       return { ...state, partnerComposing: true };
-    case 'partner_submitted':
-      return { ...state, partnerSubmittedThisRound: true, partnerComposing: false };
     case 'ooc':
       return { ...state, oocMessages: [...state.oocMessages.slice(-49), action.message] };
     case 'transient_error':
@@ -108,6 +151,8 @@ export default function useMultiplayerSession({
   const reconnectTimerRef = useRef(null);
   const intentionalCloseRef = useRef(false);
   const reconnectAttemptRef = useRef(0);
+  const assignedSlotRef = useRef(reconnectSlot || loadAssignedSlot(roomCode));
+  const clientIdRef = useRef(getOrCreateClientId(roomCode));
   // connectRef holds a stable pointer to the connect function so the close
   // handler can schedule a reconnect without creating a forward-reference.
   const connectRef = useRef(() => {});
@@ -118,6 +163,10 @@ export default function useMultiplayerSession({
   const reconnectSlotRef = useRef(reconnectSlot);
   useEffect(() => { joinPayloadRef.current = joinPayload; }, [joinPayload]);
   useEffect(() => { reconnectSlotRef.current = reconnectSlot; }, [reconnectSlot]);
+  useEffect(() => {
+    assignedSlotRef.current = reconnectSlot || loadAssignedSlot(roomCode);
+    clientIdRef.current = getOrCreateClientId(roomCode);
+  }, [roomCode, reconnectSlot]);
 
   const sendJSON = useCallback((obj) => {
     const ws = wsRef.current;
@@ -139,13 +188,28 @@ export default function useMultiplayerSession({
     } else if (t === 'token') {
       dispatch({ type: 'token', text: data.text });
     } else if (t === 'generation_start') {
-      dispatch({ type: 'generation_start' });
+      dispatch({
+        type: 'generation_start',
+        actingSlot: data.acting_slot || null,
+        actorName: data.actor_name || '',
+      });
     } else if (t === 'generation_done') {
-      dispatch({ type: 'generation_done' });
+      dispatch({
+        type: 'generation_done',
+        actingSlot: data.acting_slot || null,
+        actorName: data.actor_name || '',
+      });
+    } else if (t === 'slot_assigned') {
+      assignedSlotRef.current = data.slot || null;
+      saveAssignedSlot(roomCode, data.slot);
+      dispatch({
+        type: 'self_assigned',
+        slot: data.slot || null,
+        displayName: data.display_name || joinPayloadRef.current?.displayName || '',
+        characterName: data.character_name || joinPayloadRef.current?.characterName || '',
+      });
     } else if (t === 'partner_composing') {
       dispatch({ type: 'partner_composing' });
-    } else if (t === 'partner_submitted') {
-      dispatch({ type: 'partner_submitted' });
     } else if (t === 'ooc_message') {
       dispatch({
         type: 'ooc',
@@ -162,12 +226,15 @@ export default function useMultiplayerSession({
     } else if (t === 'player_ejected') {
       dispatch({ type: 'ejected', slot: data.slot });
     } else if (t === 'error') {
+      if (data.code === 'join_failed') {
+        intentionalCloseRef.current = true;
+      }
       dispatch({ type: 'transient_error', message: data.message || 'unknown error' });
     } else if (t === 'session_paused' || t === 'session_resumed' || t === 'player_joined' || t === 'player_ready' || t === 'floor_passed') {
       // These are informational only — sessionState updates follow immediately
       // for any state changes. Nothing to do here.
     }
-  }, []);
+  }, [roomCode]);
 
   const connect = useCallback(() => {
     if (!enabled || !roomCode) return;
@@ -181,11 +248,16 @@ export default function useMultiplayerSession({
     ws.onopen = () => {
       reconnectAttemptRef.current = 0;
       dispatch({ type: 'open' });
-      const reconnect = reconnectSlotRef.current;
+      const reconnect = reconnectSlotRef.current || assignedSlotRef.current || loadAssignedSlot(roomCode);
       const payload = joinPayloadRef.current || {};
       if (reconnect) {
-        ws.send(JSON.stringify({ type: 'reconnect', slot: reconnect }));
-        dispatch({ type: 'self_assigned', slot: reconnect, displayName: payload.displayName, characterName: payload.characterName });
+        ws.send(JSON.stringify({
+          type: 'reconnect',
+          slot: reconnect,
+          client_id: clientIdRef.current,
+          display_name: payload.displayName || '',
+          character_name: payload.characterName || '',
+        }));
       } else {
         ws.send(JSON.stringify({
           type: 'join',
@@ -194,13 +266,8 @@ export default function useMultiplayerSession({
           preference_profile: payload.preferenceProfile || null,
           preference_source: payload.preferenceSource || 'none',
           slot: payload.desiredSlot || null,
+          client_id: clientIdRef.current,
         }));
-        dispatch({
-          type: 'self_assigned',
-          slot: payload.desiredSlot || null,
-          displayName: payload.displayName || '',
-          characterName: payload.characterName || '',
-        });
       }
     };
 
@@ -211,6 +278,10 @@ export default function useMultiplayerSession({
       wsRef.current = null;
       if (intentionalCloseRef.current) return;
       const attempt = reconnectAttemptRef.current + 1;
+      if (attempt > RECONNECT_DELAYS_MS.length) {
+        dispatch({ type: 'error', message: 'Connection lost. Refresh or rejoin the room.' });
+        return;
+      }
       reconnectAttemptRef.current = attempt;
       const delay = RECONNECT_DELAYS_MS[Math.min(attempt - 1, RECONNECT_DELAYS_MS.length - 1)];
       dispatch({ type: 'reconnect_scheduled', attempt });

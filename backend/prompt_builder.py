@@ -16,7 +16,7 @@ from __future__ import annotations
 import logging
 
 from prompt_templates import GM_ONLY_MARKER, ROLE_RULES
-from schema import BlockTokens, BuiltPrompt, CampaignState, PromptStats, Role
+from schema import BlockTokens, BuiltPrompt, CampaignState, PlayerSlot, PromptStats, Role
 from tokenizer import count_messages, count_tokens, lookup_context_window
 
 log = logging.getLogger(__name__)
@@ -75,11 +75,10 @@ def _render_party(state: CampaignState) -> str:
     mp = state.multiplayer
     intro = (
         "You are narrating for TWO players, each controlling their own "
-        "character. Address both characters in your narration. Weave their "
-        "actions together into a single cohesive narrative beat. Each player "
-        "only sees your output — they do not see each other's typed actions, "
-        "so make sure your narration makes both characters' contributions "
-        "visible to both readers."
+        "character. They take turns contributing to one shared scene. Only one "
+        "player input arrives each AI turn, but both players read the same "
+        "narration. Keep both characters present in the scene while focusing "
+        "the immediate consequences on the acting character."
     )
     cards = [_render_character_card(mp.host_character, "Player 1 — host")]
     if mp.guest_character is not None:
@@ -87,6 +86,39 @@ def _render_party(state: CampaignState) -> str:
     else:
         cards.append("### (guest character not yet joined)")
     return intro + "\n\n" + "\n\n".join(cards)
+
+
+def _other_slot(slot: PlayerSlot) -> PlayerSlot:
+    return PlayerSlot.GUEST if slot == PlayerSlot.HOST else PlayerSlot.HOST
+
+
+def _character_name_for_slot(state: CampaignState, slot: PlayerSlot) -> str:
+    mp = state.multiplayer
+    if mp is None:
+        return slot.value.title()
+    if slot == PlayerSlot.HOST:
+        return mp.host_character.name or "Host"
+    if mp.guest_character is not None:
+        return mp.guest_character.name or "Guest"
+    return "Guest"
+
+
+def _render_multiplayer_narration_rules(state: CampaignState) -> str:
+    """Rules that override single-player POV guidance for multiplayer turns."""
+    assert state.multiplayer is not None
+    acting_slot = state.multiplayer.starting_slot_this_round
+    next_slot = _other_slot(acting_slot)
+    acting_name = _character_name_for_slot(state, acting_slot)
+    next_name = _character_name_for_slot(state, next_slot)
+    return "\n".join([
+        "These multiplayer rules override the single-player second-person POV guidance above.",
+        f"Current acting character: {acting_name} ({acting_slot.value}).",
+        f"Next spotlight after your response: {next_name} ({next_slot.value}).",
+        "The latest user message is that active player's input. If it uses I, me, my, or we, interpret those words as the active player's character, not as the narrator.",
+        "Narrate player-character actions in third-person present tense using character names or pronouns. Do not use second person ('you') for player characters in multiplayer.",
+        "Do not write in first person as either player character. Do not decide either player character's new actions, dialogue, thoughts, or feelings beyond the submitted input.",
+        f"End at a decision point that clearly hands the spotlight to {next_name}. Make the handoff visible in prose, not as a UI label or menu.",
+    ])
 
 
 def _render_cast(state: CampaignState) -> str:
@@ -241,6 +273,12 @@ def _build_system_prompt(
     parts.append(role_rules)
     tokens.role_rules = count_tokens(role_rules)
 
+    if state.multiplayer is not None:
+        body = _render_multiplayer_narration_rules(state)
+        s = _section("MULTIPLAYER NARRATION RULES", body)
+        parts.append(s)
+        tokens.role_rules += count_tokens(s)
+
     # 2. World
     if state.world_description.strip():
         body = state.world_description.strip()
@@ -359,25 +397,19 @@ def _select_window(
     return selected
 
 
-def format_multiplayer_user_message(
-    host_name: str,
-    host_action: str,
-    guest_name: str,
-    guest_action: str,
-    starter_slot: str = "host",
+def format_multiplayer_turn_message(
+    actor_name: str,
+    action: str,
+    next_actor_name: str | None = None,
 ) -> str:
-    """Combine two players' submissions into a single user-message string.
-
-    The starter (the player who had the floor first this round) appears first
-    in the prompt so the AI sees a consistent left-to-right reading order.
-    Neither player ever sees the other's text — privacy is enforced at the
-    WebSocket broadcast layer, not here.
-    """
-    host_block = f"[{host_name}]: {host_action.strip()}"
-    guest_block = f"[{guest_name}]: {guest_action.strip()}"
-    if starter_slot == "guest":
-        return f"{guest_block}\n\n{host_block}"
-    return f"{host_block}\n\n{guest_block}"
+    """Format one active player's submission for the GM prompt."""
+    lines = [
+        f"Acting character: {actor_name}",
+        f"Player input (I/me/my refers to {actor_name}): {action.strip()}",
+    ]
+    if next_actor_name:
+        lines.append(f"After the GM response, hand the spotlight to: {next_actor_name}")
+    return "\n".join(lines)
 
 
 def build_prompt(

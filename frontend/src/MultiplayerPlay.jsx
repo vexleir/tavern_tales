@@ -16,10 +16,11 @@ export default function MultiplayerPlay({
   sessionState,
   multiplayer,
   liveAssistantText,
+  currentGeneration,
+  lastCompletedGeneration,
   generating,
   oocMessages,
   partnerComposing,
-  partnerSubmittedThisRound,
   onSubmitAction,
   onSendOOC,
   onComposing,
@@ -52,9 +53,18 @@ export default function MultiplayerPlay({
         }
         const data = await res.json();
         if (cancelled) return;
-        const visible = (data.messages || []).filter(
-          (m) => m.role === 'assistant' && !m.is_kickoff,
-        );
+        const turnSlots = new Map();
+        (data.messages || []).forEach((m) => {
+          if (m.role === 'user' && m.turn_id && m.player_slot) {
+            turnSlots.set(m.turn_id, m.player_slot);
+          }
+        });
+        const visible = (data.messages || [])
+          .filter((m) => m.role === 'assistant' && !m.is_kickoff)
+          .map((m) => ({
+            ...m,
+            player_slot: m.player_slot || turnSlots.get(m.turn_id) || null,
+          }));
         setAssistantMessages(visible);
       } catch (e) {
         if (!cancelled) setLoadError(describeApiError(e));
@@ -63,7 +73,7 @@ export default function MultiplayerPlay({
     return () => { cancelled = true; };
   }, [mySlot, campaignId, generating]);
 
-  // For guests we stash the streamed text into history when the round ends —
+  // For guests we stash the streamed text into history when the turn ends —
   // the hook resets `liveAssistantText` to '' on generation_done.
   const lastLiveTextRef = useRef('');
   useEffect(() => {
@@ -79,34 +89,34 @@ export default function MultiplayerPlay({
           role: 'assistant',
           content: lastLiveTextRef.current,
           turn_id: `live_${Date.now()}`,
+          player_slot: lastCompletedGeneration?.slot || null,
+          actor_name: lastCompletedGeneration?.actorName || '',
         },
       ]);
       lastLiveTextRef.current = '';
     }
-  }, [mySlot, liveAssistantText, generating]);
+  }, [mySlot, liveAssistantText, generating, lastCompletedGeneration]);
 
   const status = sessionState?.status || 'paused';
   const activeSlot = sessionState?.active_slot || null;
-  const isMyTurn = activeSlot === mySlot && !generating && status !== 'paused';
+  const generationInProgress = generating || status === 'generating';
+  const isMyTurn = activeSlot === mySlot && !generationInProgress && status !== 'paused';
   const inputLocked = !isMyTurn;
 
   const indicatorText = useMemo(() => {
     if (status === 'paused') return 'Partner disconnected — waiting up to 5 minutes for reconnect.';
     if (status === 'archived') return 'Session archived.';
-    if (generating) return 'Both players submitted — AI is writing…';
+    if (generationInProgress) return 'AI is writing…';
     if (status === 'lobby') return 'Returning to lobby…';
     if (activeSlot === mySlot) {
-      return partnerSubmittedThisRound
-        ? 'Partner has already submitted. Your turn.'
-        : 'Your turn — type your action.';
+      return 'Your turn — respond to the latest narration.';
     }
     const partnerName = (mySlot === 'host'
       ? sessionState?.players?.guest?.character_name
       : sessionState?.players?.host?.character_name) || 'Partner';
-    if (partnerSubmittedThisRound) return `${partnerName} has submitted. Waiting for round.`;
     if (partnerComposing) return `${partnerName} is composing…`;
     return `${partnerName} has the floor.`;
-  }, [status, activeSlot, mySlot, generating, partnerSubmittedThisRound, partnerComposing, sessionState]);
+  }, [status, activeSlot, mySlot, generationInProgress, partnerComposing, sessionState]);
 
   const handleSubmit = () => {
     const text = draft.trim();
@@ -137,7 +147,7 @@ export default function MultiplayerPlay({
         <div className="flex flex-col h-[calc(100vh-2rem)]">
           <header className="flex justify-between items-baseline mb-2">
             <div>
-              <h1 className="text-2xl text-fantasy-accent">Round {sessionState?.turn_number ?? 0}</h1>
+              <h1 className="text-2xl text-fantasy-accent">Turn {sessionState?.turn_number ?? 0}</h1>
               <div className="text-sm text-slate-400 font-sans">{indicatorText}</div>
             </div>
             <div className="flex gap-2 text-xs font-sans">
@@ -159,17 +169,28 @@ export default function MultiplayerPlay({
 
           <div className="flex-1 overflow-y-auto bg-fantasy-panel/30 border border-slate-700/40 rounded p-4 mb-2 space-y-3">
             {assistantMessages.length === 0 && !generating && (
-              <p className="text-slate-500 italic text-sm">No narration yet — the GM is waiting on your first round.</p>
+              <p className="text-slate-500 italic text-sm">No narration yet — the GM is waiting on the first turn.</p>
             )}
             {assistantMessages.map((m) => (
-              <div key={m.id} className="text-fantasy-text whitespace-pre-wrap leading-relaxed">
-                {m.content}
-              </div>
+              <NarrationBlock
+                key={m.id}
+                message={m}
+                sessionState={sessionState}
+                multiplayer={multiplayer}
+              />
             ))}
             {generating && liveAssistantText && (
-              <div className="text-fantasy-text whitespace-pre-wrap leading-relaxed border-l-2 border-amber-600 pl-3">
-                {liveAssistantText}<span className="animate-pulse">▋</span>
-              </div>
+              <NarrationBlock
+                message={{
+                  id: 'live',
+                  content: liveAssistantText,
+                  player_slot: currentGeneration?.slot || null,
+                  actor_name: currentGeneration?.actorName || '',
+                }}
+                sessionState={sessionState}
+                multiplayer={multiplayer}
+                live
+              />
             )}
           </div>
 
@@ -192,11 +213,7 @@ export default function MultiplayerPlay({
               }`}
             />
             <div className="flex justify-between items-center mt-2 text-xs text-slate-400 font-sans">
-              <div>
-                {partnerSubmittedThisRound && !inputLocked && (
-                  <span className="text-amber-300">Partner is ready — submit when you're done.</span>
-                )}
-              </div>
+              <div>{isMyTurn ? 'The next AI response will follow your prompt.' : ''}</div>
               <button
                 onClick={handleSubmit}
                 disabled={inputLocked || !draft.trim()}
@@ -224,6 +241,56 @@ export default function MultiplayerPlay({
         </aside>
       </div>
     </div>
+  );
+}
+
+function slotName(slot, sessionState, multiplayer, fallbackName = '') {
+  if (fallbackName) return fallbackName;
+  if (slot === 'host') {
+    return multiplayer?.host_character?.name || sessionState?.players?.host?.character_name || 'Host';
+  }
+  if (slot === 'guest') {
+    return multiplayer?.guest_character?.name || sessionState?.players?.guest?.character_name || 'Guest';
+  }
+  return 'Player';
+}
+
+function slotStyle(slot) {
+  if (slot === 'guest') {
+    return {
+      border: 'border-cyan-400',
+      badge: 'border-cyan-500/50 bg-cyan-500/15 text-cyan-100',
+      accent: 'text-cyan-200',
+    };
+  }
+  if (slot === 'host') {
+    return {
+      border: 'border-amber-500',
+      badge: 'border-amber-600/50 bg-amber-500/15 text-amber-100',
+      accent: 'text-amber-200',
+    };
+  }
+  return {
+    border: 'border-slate-500',
+    badge: 'border-slate-600 bg-slate-800/70 text-slate-200',
+    accent: 'text-slate-300',
+  };
+}
+
+function NarrationBlock({ message, sessionState, multiplayer, live = false }) {
+  const slot = message.player_slot;
+  const name = slotName(slot, sessionState, multiplayer, message.actor_name);
+  const styles = slotStyle(slot);
+  return (
+    <article className={`text-fantasy-text border-l-4 ${styles.border} bg-slate-950/25 rounded-r px-3 py-2`}>
+      <div className="font-sans text-[11px] uppercase tracking-widest mb-2 flex items-center gap-2">
+        <span className={`border rounded px-2 py-0.5 ${styles.badge}`}>Prompted by {name}</span>
+        {live && <span className={`${styles.accent} normal-case tracking-normal`}>streaming</span>}
+      </div>
+      <div className="whitespace-pre-wrap leading-relaxed">
+        {message.content}{live && <span className="animate-pulse">▋</span>}
+      </div>
+    </article>
   );
 }
 

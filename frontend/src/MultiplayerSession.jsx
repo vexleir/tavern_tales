@@ -78,10 +78,11 @@ export default function MultiplayerSession({
         sessionState={state.sessionState}
         multiplayer={state.multiplayer}
         liveAssistantText={state.liveAssistantText}
+        currentGeneration={state.currentGeneration}
+        lastCompletedGeneration={state.lastCompletedGeneration}
         generating={state.generating}
         oocMessages={state.oocMessages}
         partnerComposing={state.partnerComposing}
-        partnerSubmittedThisRound={state.partnerSubmittedThisRound}
         onSubmitAction={actions.submitAction}
         onSendOOC={actions.sendOOC}
         onComposing={actions.composing}
@@ -137,26 +138,34 @@ function _initialRoomCodeFrom(prop) {
   return '';
 }
 
-export function MultiplayerEntry({ initialRoomCode = '', onBack, banner }) {
+export function MultiplayerEntry({
+  initialRoomCode = '',
+  initialJoinUrl = '',
+  initialJoinPayload = null,
+  autoLaunch = false,
+  onBack,
+  banner,
+}) {
   // Lazy initializer pulls the room code from props or the URL exactly once,
   // so we never have to setRoomCode inside an effect.
   const [roomCode, setRoomCode] = useState(() => _initialRoomCodeFrom(initialRoomCode));
-  const [displayName, setDisplayName] = useState('');
-  const [characterName, setCharacterName] = useState('');
-  const [preferenceProfile, setPreferenceProfile] = useState(null);
-  const [preferenceSource, setPreferenceSource] = useState('none');
+  const [displayName, setDisplayName] = useState(initialJoinPayload?.displayName || '');
+  const [characterName, setCharacterName] = useState(initialJoinPayload?.characterName || '');
+  const [preferenceProfile, setPreferenceProfile] = useState(initialJoinPayload?.preferenceProfile || null);
+  const [preferenceSource, setPreferenceSource] = useState(initialJoinPayload?.preferenceSource || 'none');
   const [preferenceTab, setPreferenceTab] = useState('skip'); // skip | quick | import
   const [importText, setImportText] = useState('');
   const [importError, setImportError] = useState('');
-  const [launched, setLaunched] = useState(false);
+  const [launched, setLaunched] = useState(Boolean(autoLaunch && initialRoomCode && initialJoinPayload));
 
   const joinUrl = useMemo(() => {
     if (!roomCode) return '';
+    if (initialJoinUrl) return initialJoinUrl;
     // Use the current origin so the URL works for any guest on the same LAN
     // who can reach our Vite server (host's machine + port 5173).
     const frontendOrigin = window.location.origin;
     return `${frontendOrigin}/?room_code=${roomCode}`;
-  }, [roomCode]);
+  }, [roomCode, initialJoinUrl]);
 
   const handleImport = () => {
     setImportError('');
@@ -228,6 +237,7 @@ export function MultiplayerEntry({ initialRoomCode = '', onBack, banner }) {
           characterName,
           preferenceProfile,
           preferenceSource,
+          desiredSlot: initialJoinPayload?.desiredSlot || null,
         }}
         onLeave={onBack}
         banner={banner}

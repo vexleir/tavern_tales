@@ -88,7 +88,18 @@ export default function CampaignCreator({ campaignId, initialFantasyDraft, onCom
   const [utilityModel, setUtilityModel] = useState('');
   const [gmFilter, setGmFilter] = useState('');
   const [utilityFilter, setUtilityFilter] = useState('');
+  const [hostMultiplayer, setHostMultiplayer] = useState(false);
   const [submitError, setSubmitError] = useState('');
+
+  const buildLanJoinUrl = (roomCode, lanIp) => {
+    try {
+      const here = new URL(window.location.origin);
+      const port = here.port ? `:${here.port}` : '';
+      return `${here.protocol}//${lanIp || here.hostname}${port}/?room_code=${roomCode}`;
+    } catch {
+      return `/?room_code=${roomCode}`;
+    }
+  };
 
   useEffect(() => {
     try {
@@ -233,7 +244,40 @@ export default function CampaignCreator({ campaignId, initialFantasyDraft, onCom
       });
 
       if (res.ok) {
-        onComplete();
+        if (hostMultiplayer) {
+          const sessionRes = await apiFetch('/api/session/create', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              campaign_id: payload.campaign_id,
+              host_character: {
+                name: protagonist.name,
+                gender: protagonist.gender || 'Unspecified',
+                location: protagonist.location,
+                appearance: protagonist.appearance || '',
+                description: protagonist.description || '',
+                stats: payload.stats,
+                inventory,
+              },
+            }),
+          });
+          if (!sessionRes.ok) {
+            const err = await sessionRes.json().catch(() => ({ detail: 'unknown' }));
+            setSubmitError(`Campaign created, but multiplayer hosting failed: ${err.detail || sessionRes.statusText}`);
+            return;
+          }
+          const session = await sessionRes.json();
+          onComplete({
+            mode: 'multiplayer',
+            campaignId: payload.campaign_id,
+            roomCode: session.room_code,
+            joinUrl: session.join_url || buildLanJoinUrl(session.room_code, session.lan_ip),
+            lanIp: session.lan_ip,
+            hostCharacterName: protagonist.name,
+          });
+          return;
+        }
+        onComplete({ mode: 'solo', campaignId: payload.campaign_id });
       } else {
         const err = await res.json().catch(() => ({detail: 'unknown'}));
         setSubmitError(`Failed to start campaign: ${err.detail || res.statusText}`);
@@ -315,6 +359,24 @@ export default function CampaignCreator({ campaignId, initialFantasyDraft, onCom
               <p className="text-xs text-slate-500 mt-1 italic">Used for world generation, summaries, and state tracking. Leave on auto if unsure — or pick the same model as the Narrator.</p>
             </div>
           </div>
+        </section>
+
+        <section className="bg-fantasy-panel/40 border border-slate-700/50 rounded-xl p-6 shadow-md backdrop-blur">
+          <h2 className="text-xl font-serif text-amber-500 mb-3 border-b border-slate-700/50 pb-2">Session Mode</h2>
+          <label className="flex items-start gap-3 text-sm text-slate-300">
+            <input
+              type="checkbox"
+              checked={hostMultiplayer}
+              onChange={(e) => setHostMultiplayer(e.target.checked)}
+              className="mt-1"
+            />
+            <span>
+              <span className="block text-amber-200 font-semibold">Host this as a multiplayer session</span>
+              <span className="block text-xs text-slate-400 mt-1">
+                After the campaign is created, you will enter a lobby with a room code and LAN join link for the guest.
+              </span>
+            </span>
+          </label>
         </section>
 
         {/* World Generation */}
@@ -541,7 +603,7 @@ export default function CampaignCreator({ campaignId, initialFantasyDraft, onCom
              onClick={handleStart}
              className="bg-gradient-to-b from-fantasy-accent to-amber-700 hover:from-amber-600 hover:to-amber-800 text-white px-12 py-4 rounded-xl font-bold tracking-widest uppercase shadow-lg transition transform hover:scale-[1.02]"
            >
-             Begin Adventure
+             {hostMultiplayer ? 'Host Multiplayer' : 'Begin Adventure'}
            </button>
         </div>
 

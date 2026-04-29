@@ -12,6 +12,16 @@ import { apiFetch, describeApiError } from './lib/api';
 
 const createCampaignId = () => `campaign_${Date.now()}`;
 
+const initialAppMode = () => {
+  if (typeof window === 'undefined') return 'menu';
+  try {
+    const params = new URLSearchParams(window.location.search);
+    return params.get('room_code') ? 'multiplayer' : 'menu';
+  } catch {
+    return 'menu';
+  }
+};
+
 const QUICK_ACTIONS = [
   { label: '⚔ Attack', text: 'I attack [target] with [weapon].' },
   { label: '🗣 Persuade', text: 'I attempt to persuade [character] to [goal].' },
@@ -22,7 +32,7 @@ const QUICK_ACTIONS = [
 ];
 
 function AppInner() {
-  const [appMode, setAppMode] = useState('menu');
+  const [appMode, setAppMode] = useState(initialAppMode);
   const [activeCampaignId, setActiveCampaignId] = useState(() => createCampaignId());
   const [campaignState, setCampaignState] = useState(null);
   const [messages, setMessages] = useState([]);
@@ -40,6 +50,7 @@ function AppInner() {
   const [renamingId, setRenamingId] = useState(null);
   const [renameDraft, setRenameDraft] = useState('');
   const [pendingFantasyDraft, setPendingFantasyDraft] = useState(null);
+  const [multiplayerLaunch, setMultiplayerLaunch] = useState(null);
   const [helpOpen, setHelpOpen] = useState(false);
   const [showQuickActions, setShowQuickActions] = useState(() => {
     try { return window.localStorage?.getItem('tt_quick_actions') === 'true'; } catch { return false; }
@@ -47,6 +58,18 @@ function AppInner() {
 
   const modal = useModal();
   const banner = useBanner();
+
+  const buildLanJoinUrl = useCallback((roomCode, lanIp) => {
+    if (!roomCode) return '';
+    try {
+      const here = new URL(window.location.origin);
+      const hostname = lanIp || here.hostname;
+      const port = here.port ? `:${here.port}` : '';
+      return `${here.protocol}//${hostname}${port}/?room_code=${roomCode}`;
+    } catch {
+      return `/?room_code=${roomCode}`;
+    }
+  }, []);
 
   // Scroll the chat to the latest paragraph the first time a campaign's messages
   // populate — avoids landing on the prologue when reopening a long story.
@@ -241,6 +264,74 @@ function AppInner() {
       setSavedCampaigns(await res.json());
     } catch (err) {
       banner.error(`Delete failed: ${describeApiError(err)}`);
+    }
+  };
+
+  const hostCampaign = async (campaign, e) => {
+    e.stopPropagation();
+    try {
+      const stateRes = await apiFetch(`/api/state/${campaign.id}`, {
+        headers: { 'X-Player-Slot': 'host' },
+      });
+      if (!stateRes.ok) {
+        banner.error('Could not load campaign to host.');
+        return;
+      }
+      const state = await stateRes.json();
+      if (state.multiplayer && state.multiplayer.session_status !== 'archived') {
+        const roomCode = state.multiplayer.room_code;
+        const serverInfo = await apiFetch('/api/server/info').then(r => r.json()).catch(() => ({}));
+        setMultiplayerLaunch({
+          roomCode,
+          joinUrl: buildLanJoinUrl(roomCode, serverInfo.lan_ip),
+          joinPayload: {
+            displayName: 'Host',
+            characterName: state.multiplayer.host_character?.name || state.player?.name || 'Host',
+            desiredSlot: 'host',
+            preferenceProfile: null,
+            preferenceSource: 'none',
+          },
+        });
+        setAppMode('multiplayer');
+        return;
+      }
+
+      const createRes = await apiFetch('/api/session/create', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          campaign_id: campaign.id,
+          host_character: {
+            name: state.player?.name || 'Host',
+            gender: state.player?.gender || 'Unspecified',
+            location: state.player?.location || '',
+            appearance: state.player?.appearance || '',
+            description: state.player?.description || '',
+            stats: state.player?.stats || {},
+            inventory: state.player?.inventory || [],
+          },
+        }),
+      });
+      if (!createRes.ok) {
+        const detail = await createRes.json().catch(() => ({ detail: createRes.statusText }));
+        banner.error(`Could not host multiplayer: ${detail.detail || createRes.statusText}`);
+        return;
+      }
+      const created = await createRes.json();
+      setMultiplayerLaunch({
+        roomCode: created.room_code,
+        joinUrl: buildLanJoinUrl(created.room_code, created.lan_ip),
+        joinPayload: {
+          displayName: 'Host',
+          characterName: state.player?.name || created.multiplayer?.host_character?.name || 'Host',
+          desiredSlot: 'host',
+          preferenceProfile: null,
+          preferenceSource: 'none',
+        },
+      });
+      setAppMode('multiplayer');
+    } catch (err) {
+      banner.error(`Could not host multiplayer: ${describeApiError(err)}`);
     }
   };
 
@@ -505,7 +596,7 @@ function AppInner() {
           >?</button>
 
           <button
-            onClick={() => { setPendingFantasyDraft(null); setActiveCampaignId(createCampaignId()); setAppMode('setup'); }}
+            onClick={() => { setPendingFantasyDraft(null); setMultiplayerLaunch(null); setActiveCampaignId(createCampaignId()); setAppMode('setup'); }}
             className="bg-indigo-700 hover:bg-indigo-600 text-white w-full py-4 rounded-lg font-sans font-bold tracking-widest text-lg uppercase transition shadow-md mb-4"
           >+ Forge New World</button>
 
@@ -515,7 +606,7 @@ function AppInner() {
           >Preference Profiles</button>
 
           <button
-            onClick={() => setAppMode('multiplayer')}
+            onClick={() => { setMultiplayerLaunch(null); setAppMode('multiplayer'); }}
             className="bg-slate-800 hover:bg-slate-700 text-emerald-300 border border-slate-600 w-full py-3 rounded-lg font-sans font-bold tracking-widest text-sm uppercase transition shadow-md mb-2"
           >Join Multiplayer Session</button>
           {pendingFantasyDraft && (
@@ -566,6 +657,7 @@ function AppInner() {
                 {renamingId !== c.id && (
                   <>
                     <button onClick={(e) => beginRename(c, e)} className="bg-slate-800 hover:bg-slate-700 text-slate-300 border border-slate-600 rounded px-4 font-sans font-bold transition" title="Rename World">✎</button>
+                    <button onClick={(e) => hostCampaign(c, e)} className="bg-emerald-900/40 hover:bg-emerald-800 text-emerald-200 border border-emerald-800/50 rounded px-4 font-sans font-bold transition" title="Host Multiplayer">Host</button>
                     <button onClick={(e) => deleteCampaign(c.id, e)} className="bg-red-900/40 hover:bg-red-800 text-red-200 border border-red-900/50 rounded px-4 font-sans font-bold transition" title="Delete World">✗</button>
                   </>
                 )}
@@ -579,7 +671,29 @@ function AppInner() {
   }
 
   if (appMode === 'setup') {
-    return <CampaignCreator campaignId={activeCampaignId} initialFantasyDraft={pendingFantasyDraft} onComplete={async () => { setPendingFantasyDraft(null); await loadCampaign(activeCampaignId); }} />;
+    return <CampaignCreator
+      campaignId={activeCampaignId}
+      initialFantasyDraft={pendingFantasyDraft}
+      onComplete={async (result) => {
+        setPendingFantasyDraft(null);
+        if (result?.mode === 'multiplayer') {
+          setMultiplayerLaunch({
+            roomCode: result.roomCode,
+            joinUrl: result.joinUrl || buildLanJoinUrl(result.roomCode, result.lanIp),
+            joinPayload: {
+              displayName: 'Host',
+              characterName: result.hostCharacterName || 'Host',
+              desiredSlot: 'host',
+              preferenceProfile: null,
+              preferenceSource: 'none',
+            },
+          });
+          setAppMode('multiplayer');
+          return;
+        }
+        await loadCampaign(activeCampaignId);
+      }}
+    />;
   }
 
   if (appMode === 'profiles') {
@@ -587,6 +701,7 @@ function AppInner() {
       onBack={() => setAppMode('menu')}
       onCreateCampaignFromDraft={(draft) => {
         setPendingFantasyDraft(draft);
+        setMultiplayerLaunch(null);
         setActiveCampaignId(createCampaignId());
         setAppMode('setup');
       }}
@@ -595,8 +710,12 @@ function AppInner() {
 
   if (appMode === 'multiplayer') {
     return <MultiplayerEntry
+      initialRoomCode={multiplayerLaunch?.roomCode || ''}
+      initialJoinUrl={multiplayerLaunch?.joinUrl || ''}
+      initialJoinPayload={multiplayerLaunch?.joinPayload || null}
+      autoLaunch={Boolean(multiplayerLaunch?.roomCode && multiplayerLaunch?.joinPayload)}
       banner={banner}
-      onBack={() => setAppMode('menu')}
+      onBack={() => { setMultiplayerLaunch(null); setAppMode('menu'); }}
     />;
   }
 

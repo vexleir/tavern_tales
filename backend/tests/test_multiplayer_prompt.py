@@ -55,6 +55,12 @@ def test_multiplayer_prompt_includes_party_block(new_state):
     assert "Quiver" in sp   # guest inventory
     assert "Sword: 12" in sp
     assert "Bow: 18" in sp
+    assert "[MULTIPLAYER NARRATION RULES]" in sp
+    assert "override the single-player second-person POV guidance" in sp
+    assert "Current acting character: Aragorn (host)." in sp
+    assert "Next spotlight after your response: Legolas (guest)." in sp
+    assert "third-person present tense" in sp
+    assert "Do not use second person" in sp
 
 
 def test_multiplayer_prompt_handles_missing_guest(new_state):
@@ -73,25 +79,12 @@ def test_single_player_still_uses_protagonist_block(new_state):
     assert "[PARTY]" not in built.system_prompt
 
 
-def test_format_multiplayer_user_message_orders_by_starter():
-    # Host starts → host action first.
-    msg = prompt_builder.format_multiplayer_user_message(
-        host_name="Aragorn",
-        host_action="I draw my sword.",
-        guest_name="Legolas",
-        guest_action="I knock an arrow.",
-        starter_slot="host",
+def test_format_multiplayer_turn_message_attributes_single_actor():
+    msg = prompt_builder.format_multiplayer_turn_message(
+        "Legolas",
+        " I study the tracks. ",
+        next_actor_name="Aragorn",
     )
-    assert msg.startswith("[Aragorn]:")
-    assert msg.index("[Aragorn]") < msg.index("[Legolas]")
-
-    # Guest starts → guest action first.
-    msg = prompt_builder.format_multiplayer_user_message(
-        host_name="Aragorn",
-        host_action="I draw my sword.",
-        guest_name="Legolas",
-        guest_action="I knock an arrow.",
-        starter_slot="guest",
-    )
-    assert msg.startswith("[Legolas]:")
-    assert msg.index("[Legolas]") < msg.index("[Aragorn]")
+    assert "Acting character: Legolas" in msg
+    assert "Player input (I/me/my refers to Legolas): I study the tracks." in msg
+    assert "hand the spotlight to: Aragorn" in msg

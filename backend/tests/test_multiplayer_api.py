@@ -38,11 +38,18 @@ def test_create_session_and_state_auth(temp_state_dir, temp_chroma, mock_ollama)
     client = _client(temp_state_dir, temp_chroma, mock_ollama)
     _init_campaign(client)
 
-    response = client.post("/api/session/create", json={"campaign_id": "camp_session"})
+    response = client.post(
+        "/api/session/create",
+        json={"campaign_id": "camp_session"},
+        headers={"Origin": "http://192.168.1.50:5173"},
+    )
     assert response.status_code == 200, response.text
     body = response.json()
     room_code = body["room_code"]
     assert len(room_code) == 6
+    assert body["join_url"].startswith("http://")
+    assert ":5173/" in body["join_url"]
+    assert ":8000/" not in body["join_url"]
     assert body["session_state"]["status"] == "lobby"
     assert body["multiplayer"]["host_character"]["name"] == "Hero"
 
