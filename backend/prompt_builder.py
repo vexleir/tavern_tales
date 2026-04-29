@@ -51,6 +51,44 @@ def _render_protagonist(state: CampaignState) -> str:
     return "\n".join(lines)
 
 
+def _render_character_card(character, label: str) -> str:
+    """Render a single PlayerCharacter into a labelled sub-section."""
+    stats = ", ".join(f"{k}: {v}" for k, v in character.stats.items()) or "(none)"
+    inv = ", ".join(character.inventory) if character.inventory else "(empty)"
+    lines = [f"### {character.name} ({label})"]
+    if character.gender and character.gender != "Unspecified":
+        lines.append(f"Gender: {character.gender}")
+    if character.location:
+        lines.append(f"Location: {character.location}")
+    if character.appearance.strip():
+        lines.append(f"Appearance: {character.appearance.strip()}")
+    if character.description.strip():
+        lines.append(f"Details: {character.description.strip()}")
+    lines.append(f"Stats: {stats}")
+    lines.append(f"Inventory: {inv}")
+    return "\n".join(lines)
+
+
+def _render_party(state: CampaignState) -> str:
+    """Render both player characters for a multiplayer session."""
+    assert state.multiplayer is not None
+    mp = state.multiplayer
+    intro = (
+        "You are narrating for TWO players, each controlling their own "
+        "character. Address both characters in your narration. Weave their "
+        "actions together into a single cohesive narrative beat. Each player "
+        "only sees your output — they do not see each other's typed actions, "
+        "so make sure your narration makes both characters' contributions "
+        "visible to both readers."
+    )
+    cards = [_render_character_card(mp.host_character, "Player 1 — host")]
+    if mp.guest_character is not None:
+        cards.append(_render_character_card(mp.guest_character, "Player 2 — guest"))
+    else:
+        cards.append("### (guest character not yet joined)")
+    return intro + "\n\n" + "\n\n".join(cards)
+
+
 def _render_cast(state: CampaignState) -> str:
     if not state.npcs:
         return "(no named NPCs yet)"
@@ -217,9 +255,13 @@ def _build_system_prompt(
         parts.append(s)
         tokens.scene = count_tokens(s)
 
-    # 4. Protagonist
-    body = _render_protagonist(state)
-    s = _section("PROTAGONIST", body)
+    # 4. Protagonist (single-player) or Party (multiplayer).
+    if state.multiplayer is not None:
+        body = _render_party(state)
+        s = _section("PARTY", body)
+    else:
+        body = _render_protagonist(state)
+        s = _section("PROTAGONIST", body)
     parts.append(s)
     tokens.protagonist = count_tokens(s)
 
@@ -317,6 +359,27 @@ def _select_window(
     return selected
 
 
+def format_multiplayer_user_message(
+    host_name: str,
+    host_action: str,
+    guest_name: str,
+    guest_action: str,
+    starter_slot: str = "host",
+) -> str:
+    """Combine two players' submissions into a single user-message string.
+
+    The starter (the player who had the floor first this round) appears first
+    in the prompt so the AI sees a consistent left-to-right reading order.
+    Neither player ever sees the other's text — privacy is enforced at the
+    WebSocket broadcast layer, not here.
+    """
+    host_block = f"[{host_name}]: {host_action.strip()}"
+    guest_block = f"[{guest_name}]: {guest_action.strip()}"
+    if starter_slot == "guest":
+        return f"{guest_block}\n\n{host_block}"
+    return f"{host_block}\n\n{guest_block}"
+
+
 def build_prompt(
     state: CampaignState,
     user_message: str | None,
@@ -334,7 +397,10 @@ def build_prompt(
     """
     retrieved_memories = retrieved_memories or []
     model_window = lookup_context_window(state.models.gm)
-    # Leave ~500 tokens of safety margin at the very end.
+    # Leave ~500 tokens of safety margin at the very end. Multiplayer carries
+    # an extra character card and merged preference text, so reserve more.
+    if state.multiplayer is not None:
+        system_reserve = max(system_reserve, 1750)
     total_budget = max(2048, model_window - 500)
     window_budget = max(512, total_budget - system_reserve - response_budget)
 

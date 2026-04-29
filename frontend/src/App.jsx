@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import CampaignCreator from './CampaignCreator';
 import PreferenceProfiles from './PreferenceProfiles';
+import { MultiplayerEntry } from './MultiplayerSession';
 import BannerProvider from './components/BannerProvider';
 import HelpModal from './components/HelpModal';
 import ModalProvider from './components/ModalProvider';
@@ -512,6 +513,11 @@ function AppInner() {
             onClick={() => setAppMode('profiles')}
             className="bg-slate-800 hover:bg-slate-700 text-amber-400 border border-slate-600 w-full py-3 rounded-lg font-sans font-bold tracking-widest text-sm uppercase transition shadow-md mb-2"
           >Preference Profiles</button>
+
+          <button
+            onClick={() => setAppMode('multiplayer')}
+            className="bg-slate-800 hover:bg-slate-700 text-emerald-300 border border-slate-600 w-full py-3 rounded-lg font-sans font-bold tracking-widest text-sm uppercase transition shadow-md mb-2"
+          >Join Multiplayer Session</button>
           {pendingFantasyDraft && (
             <p className="text-xs text-amber-400 italic mb-4">Campaign seeded from: {pendingFantasyDraft.title || 'a saved fantasy draft'}</p>
           )}
@@ -584,6 +590,13 @@ function AppInner() {
         setActiveCampaignId(createCampaignId());
         setAppMode('setup');
       }}
+    />;
+  }
+
+  if (appMode === 'multiplayer') {
+    return <MultiplayerEntry
+      banner={banner}
+      onBack={() => setAppMode('menu')}
     />;
   }
 

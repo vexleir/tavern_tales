@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 from enum import Enum
-from typing import Any
+from typing import Any, Literal
 from uuid import uuid4
 
 from pydantic import BaseModel, ConfigDict, Field
@@ -34,6 +34,20 @@ class Role(str, Enum):
     SYSTEM = "system"
 
 
+class PlayerSlot(str, Enum):
+    HOST = "host"
+    GUEST = "guest"
+
+
+class SessionStatus(str, Enum):
+    LOBBY = "lobby"
+    HOST_TURN = "host_turn"
+    GUEST_TURN = "guest_turn"
+    GENERATING = "generating"
+    PAUSED = "paused"
+    ARCHIVED = "archived"
+
+
 # ---------------------------------------------------------------------------
 # Sub-models
 # ---------------------------------------------------------------------------
@@ -45,6 +59,23 @@ class Player(BaseModel):
     gender: str = "Unspecified"  # M / F / NB / Unspecified (free-form to allow custom values)
     appearance: str = ""  # physical description — what others see
     description: str = ""  # personality, backstory, notable traits
+    stats: dict[str, int] = Field(default_factory=dict)
+    inventory: list[str] = Field(default_factory=list)
+
+
+class PlayerCharacter(BaseModel):
+    """One player-controlled character in a multiplayer session.
+
+    Mirrors `Player` but tagged with a slot so multiple characters can co-exist
+    in the same campaign. Single-player campaigns continue to use `Player`.
+    """
+
+    slot: PlayerSlot
+    name: str = "Unknown"
+    location: str = ""
+    gender: str = "Unspecified"
+    appearance: str = ""
+    description: str = ""
     stats: dict[str, int] = Field(default_factory=dict)
     inventory: list[str] = Field(default_factory=list)
 
@@ -66,6 +97,7 @@ class Message(BaseModel):
     timestamp: str = Field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
     is_kickoff: bool = False
     partial: bool = False  # set True if generation was interrupted (C1)
+    player_slot: Literal["host", "guest"] | None = None  # multiplayer attribution
 
 
 class ChapterSummary(BaseModel):
@@ -153,6 +185,7 @@ class CampaignEvent(BaseModel):
 class ReversalPatch(BaseModel):
     """Inverse of an extraction delta, used to roll back a message's side effects (B1/B2)."""
 
+    player_slot: Literal["host", "guest"] | None = None  # multiplayer slot, None for single-player
     stats_changes: dict[str, int] = Field(default_factory=dict)  # inverted deltas
     location_before: str | None = None
     inventory_to_remove: list[str] = Field(default_factory=list)
@@ -163,8 +196,30 @@ class ReversalPatch(BaseModel):
 class MessageSideEffects(BaseModel):
     memory_ids: list[str] = Field(default_factory=list)
     reversal: ReversalPatch = Field(default_factory=ReversalPatch)
+    # In multiplayer turns, character-specific reversals (one per slot) live here.
+    # NPC reversals from the turn are stored on `reversal` (shared/global).
+    extra_reversals: list[ReversalPatch] = Field(default_factory=list)
     status: str = "pending"
     error: str = ""
+
+
+class MultiplayerConfig(BaseModel):
+    """Multiplayer session configuration attached to a campaign.
+
+    When `multiplayer` is None on a CampaignState, the campaign is single-player
+    and the legacy `player` field is the source of truth. When present, both
+    `host_character` and (eventually) `guest_character` carry per-slot state and
+    `player` is left untouched for backwards compat.
+    """
+
+    room_code: str
+    host_character: "PlayerCharacter"
+    guest_character: "PlayerCharacter | None" = None
+    merged_preference_context: "CampaignPreferenceContext | None" = None
+    session_status: SessionStatus = SessionStatus.LOBBY
+    starting_slot_this_round: PlayerSlot = PlayerSlot.HOST
+    turn_number: int = 0
+    reconnect_window_seconds: int = 300
 
 
 class CampaignPreferenceContext(BaseModel):
@@ -223,6 +278,10 @@ class CampaignState(BaseModel):
     stat_bounds: dict[str, StatBound] = Field(default_factory=dict)
     sampling_overrides: SamplingOverrides = Field(default_factory=SamplingOverrides)
 
+    # Multiplayer is opt-in. Single-player campaigns leave this as None and
+    # continue using the legacy `player` field above.
+    multiplayer: MultiplayerConfig | None = None
+
 
 class CampaignSummary(BaseModel):
     """Lightweight listing shape for the menu screen."""
@@ -254,6 +313,25 @@ class StateDelta(BaseModel):
     inventory_added: list[str] = Field(default_factory=list)
     inventory_removed: list[str] = Field(default_factory=list)
     npc_updates: list[NPCUpdate] = Field(default_factory=list)
+
+
+class MultiplayerStateDelta(BaseModel):
+    """Per-slot extraction output for multiplayer turns.
+
+    Stats / location / inventory updates are attributed per character.
+    NPC updates are global (NPCs are shared across the campaign).
+    """
+
+    model_config = ConfigDict(extra="ignore")
+
+    host: StateDelta = Field(default_factory=StateDelta)
+    guest: StateDelta = Field(default_factory=StateDelta)
+    npc_updates: list[NPCUpdate] = Field(default_factory=list)
+
+
+# Resolve forward references on MultiplayerConfig now that PlayerCharacter and
+# CampaignPreferenceContext exist as concrete classes.
+MultiplayerConfig.model_rebuild()
 
 
 # ---------------------------------------------------------------------------

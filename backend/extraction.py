@@ -14,7 +14,7 @@ from pydantic import ValidationError
 
 from model_resolver import resolve_utility_model
 from ollama_client import complete_json
-from schema import CampaignState, StateDelta
+from schema import CampaignState, PlayerSlot, StateDelta
 
 log = logging.getLogger(__name__)
 
@@ -71,4 +71,48 @@ async def extract_state_changes(
         return StateDelta.model_validate(raw)
     except ValidationError as e:
         log.warning("Extraction JSON failed validation: %s; raw=%r", e, raw)
+        return StateDelta()
+
+
+async def extract_state_changes_for_slot(
+    state: CampaignState,
+    slot: PlayerSlot,
+    user_action: str,
+    gm_response: str,
+) -> StateDelta:
+    """Extract state changes for one character in a multiplayer round.
+
+    Uses the slot's character stats as the hint set so the model has the right
+    keys to choose from. Falls back gracefully when the multiplayer config or
+    target character isn't populated.
+    """
+    if state.multiplayer is None:
+        return await extract_state_changes(state, user_action, gm_response)
+
+    if slot == PlayerSlot.HOST:
+        character = state.multiplayer.host_character
+    elif slot == PlayerSlot.GUEST and state.multiplayer.guest_character is not None:
+        character = state.multiplayer.guest_character
+    else:
+        return StateDelta()
+
+    utility_model = await resolve_utility_model(state.models.utility, state.models.gm)
+    active_stats = list(character.stats.keys()) or ["Health", "Gold"]
+
+    framing = (
+        f"You are extracting state changes that apply ONLY to character "
+        f"{character.name!r} in a two-player session. Ignore any changes that "
+        f"clearly belong to the other character."
+    )
+    prompt = framing + "\n\n" + _build_prompt(user_action, gm_response, active_stats)
+    raw = await complete_json(
+        messages=[{"role": "user", "content": prompt}],
+        model=utility_model,
+    )
+    if raw is None:
+        return StateDelta()
+    try:
+        return StateDelta.model_validate(raw)
+    except ValidationError as e:
+        log.warning("Multiplayer extraction (%s) failed validation: %s; raw=%r", slot.value, e, raw)
         return StateDelta()

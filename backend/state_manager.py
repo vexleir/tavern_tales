@@ -28,9 +28,13 @@ from schema import (
     CampaignEvent,
     Disposition,
     Message,
+    Player,
+    PlayerCharacter,
+    PlayerSlot,
     Role,
     StateDelta,
     StatBound,
+    MultiplayerConfig,
 )
 
 log = logging.getLogger(__name__)
@@ -263,21 +267,56 @@ def _clamp_stat(name: str, new_value: int, bounds: dict[str, StatBound]) -> int:
     return max(b.min, min(b.max, new_value))
 
 
+def _resolve_character_target(
+    state: CampaignState,
+    player_slot: PlayerSlot | str | None,
+) -> Player | PlayerCharacter:
+    """Resolve which Player / PlayerCharacter object a delta should be applied to.
+
+    Single-player (slot=None): returns `state.player`.
+    Multiplayer (slot=host/guest): returns the matching `PlayerCharacter`,
+    falling back to `state.player` if the multiplayer config is absent.
+    """
+    if player_slot is None:
+        return state.player
+    slot_value = player_slot.value if isinstance(player_slot, PlayerSlot) else str(player_slot)
+    if state.multiplayer is None:
+        return state.player
+    if slot_value == PlayerSlot.HOST.value:
+        return state.multiplayer.host_character
+    if slot_value == PlayerSlot.GUEST.value and state.multiplayer.guest_character is not None:
+        return state.multiplayer.guest_character
+    # Unknown slot or guest not yet joined — fall back gracefully.
+    return state.player
+
+
 def apply_state_delta(
     state: CampaignState,
     delta: StateDelta,
+    player_slot: PlayerSlot | str | None = None,
 ) -> dict[str, Any]:
     """
     Apply an extraction delta to a CampaignState in place.
     Returns a ReversalPatch-compatible dict describing how to undo this change (B1/B2).
+
+    `player_slot` is None for single-player (legacy `state.player`). When provided
+    in multiplayer mode, stats / location / inventory updates target the matching
+    `PlayerCharacter`. NPC updates are always global.
     """
+    slot_value: str | None = None
+    if player_slot is not None:
+        slot_value = player_slot.value if isinstance(player_slot, PlayerSlot) else str(player_slot)
+
     reversal: dict[str, Any] = {
+        "player_slot": slot_value,
         "stats_changes": {},
         "location_before": None,
         "inventory_to_remove": [],
         "inventory_to_restore": [],
         "npc_reversals": [],
     }
+
+    target = _resolve_character_target(state, player_slot)
 
     # Stats
     for stat_name, raw_delta in delta.stats_changes.items():
@@ -287,7 +326,7 @@ def apply_state_delta(
         if d == 0:
             continue
 
-        current = state.player.stats.get(stat_name, 0)
+        current = target.stats.get(stat_name, 0)
 
         # Suspicious-delta guard (B5): huge deltas likely indicate the model
         # returned an absolute value rather than a delta. Halve with warning.
@@ -299,39 +338,39 @@ def apply_state_delta(
             d = d // 2
 
         # Dynamic stat: new stats get default bounds registered (B7).
-        if stat_name not in state.player.stats:
+        if stat_name not in target.stats:
             state.stat_bounds.setdefault(stat_name, StatBound())
 
         new_value = _clamp_stat(stat_name, current + d, state.stat_bounds)
         applied_delta = new_value - current  # may differ from d due to clamping
         if applied_delta == 0:
             continue
-        state.player.stats[stat_name] = new_value
+        target.stats[stat_name] = new_value
         reversal["stats_changes"][stat_name] = -applied_delta
 
     # Location
     if delta.location and delta.location.strip():
-        reversal["location_before"] = state.player.location
-        state.player.location = delta.location.strip()
+        reversal["location_before"] = target.location
+        target.location = delta.location.strip()
 
     # Inventory
     for item in delta.inventory_added:
         if not isinstance(item, str) or not item.strip():
             continue
         item = item.strip()
-        if item not in state.player.inventory:
-            state.player.inventory.append(item)
+        if item not in target.inventory:
+            target.inventory.append(item)
             reversal["inventory_to_remove"].append(item)
 
     for item in delta.inventory_removed:
         if not isinstance(item, str) or not item.strip():
             continue
         item = item.strip()
-        if item in state.player.inventory:
-            state.player.inventory.remove(item)
+        if item in target.inventory:
+            target.inventory.remove(item)
             reversal["inventory_to_restore"].append(item)
 
-    # NPCs
+    # NPCs (always global, regardless of slot)
     for upd in delta.npc_updates:
         if not upd.name:
             continue
@@ -361,24 +400,27 @@ def apply_state_delta(
 
 def apply_reversal(state: CampaignState, reversal: dict[str, Any]) -> None:
     """Undo the effects of `apply_state_delta` using the reversal patch (B2)."""
+    slot_value = reversal.get("player_slot")
+    target = _resolve_character_target(state, slot_value)
+
     for stat_name, inverse in reversal.get("stats_changes", {}).items():
         if not isinstance(inverse, (int, float)):
             continue
-        current = state.player.stats.get(stat_name, 0)
+        current = target.stats.get(stat_name, 0)
         new_value = _clamp_stat(stat_name, current + int(inverse), state.stat_bounds)
-        state.player.stats[stat_name] = new_value
+        target.stats[stat_name] = new_value
 
     loc_before = reversal.get("location_before")
     if loc_before:
-        state.player.location = loc_before
+        target.location = loc_before
 
     for item in reversal.get("inventory_to_remove", []):
-        if item in state.player.inventory:
-            state.player.inventory.remove(item)
+        if item in target.inventory:
+            target.inventory.remove(item)
 
     for item in reversal.get("inventory_to_restore", []):
-        if item not in state.player.inventory:
-            state.player.inventory.append(item)
+        if item not in target.inventory:
+            target.inventory.append(item)
 
     for rev in reversal.get("npc_reversals", []):
         name = rev.get("name")
@@ -428,3 +470,49 @@ def record_event(state: CampaignState, event_type: str, message: str) -> None:
     """Append a compact event-log entry, keeping only the most recent 100."""
     state.events.append(CampaignEvent(type=event_type, message=message))
     state.events = state.events[-100:]
+
+
+def get_multiplayer_config(state: CampaignState) -> MultiplayerConfig | None:
+    """Return the multiplayer config for callers that should not touch internals."""
+    return state.multiplayer
+
+
+async def update_multiplayer_config(
+    campaign_id: str,
+    updater: Callable[[MultiplayerConfig], Awaitable[MultiplayerConfig | None] | MultiplayerConfig | None],
+) -> MultiplayerConfig | None:
+    """Mutate and persist a campaign's MultiplayerConfig.
+
+    The updater may edit the config in place and return None, or return a
+    replacement config. Returns the saved config, or None if the campaign is
+    missing or not multiplayer.
+    """
+    saved_config: MultiplayerConfig | None = None
+
+    async def _apply(state: CampaignState) -> CampaignState:
+        nonlocal saved_config
+        if state.multiplayer is None:
+            return state
+        maybe_coro = updater(state.multiplayer)
+        if asyncio.iscoroutine(maybe_coro):
+            replacement = await maybe_coro
+        else:
+            replacement = maybe_coro
+        if replacement is not None:
+            state.multiplayer = replacement
+        saved_config = state.multiplayer
+        return state
+
+    await mutate_state(campaign_id, _apply)
+    return saved_config
+
+
+async def set_guest_character(campaign_id: str, character: PlayerCharacter) -> MultiplayerConfig | None:
+    """Set or replace the guest character on a multiplayer campaign."""
+    character.slot = PlayerSlot.GUEST
+
+    async def _update(config: MultiplayerConfig) -> MultiplayerConfig:
+        config.guest_character = character
+        return config
+
+    return await update_multiplayer_config(campaign_id, _update)

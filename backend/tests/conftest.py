@@ -39,6 +39,18 @@ def temp_state_dir(tmp_path, monkeypatch):
     return tmp_path
 
 
+@pytest.fixture(autouse=True)
+def temp_session_manager(tmp_path, monkeypatch):
+    """Reset in-memory multiplayer sessions and redirect session artifacts."""
+    import asyncio
+
+    import session_manager
+
+    monkeypatch.setattr(session_manager, "_sessions", {})
+    monkeypatch.setattr(session_manager, "_sessions_guard", asyncio.Lock())
+    monkeypatch.setattr(session_manager, "SESSIONS_DIR", tmp_path / "sessions")
+
+
 # --------------------------------------------------------------------------- #
 # Temp chroma dir
 # --------------------------------------------------------------------------- #

@@ -29,7 +29,11 @@
       "Bash(awk '{print $2}')",
       "Bash(xargs -r kill)",
       "Bash(python -m pytest -q)",
-      "Bash(npm run *)"
+      "Bash(npm run *)",
+      "Bash(python -m pytest -x --tb=short)",
+      "Bash(python -c \"import preference_logic; print\\([n for n in dir\\(preference_logic\\) if not n.startswith\\('_'\\)]\\)\")",
+      "Bash(python -c \"import preference_merger; ctx = preference_merger.merge_preferences\\(None, None\\); print\\('OK', ctx.enabled, len\\(ctx.selected_themes\\)\\)\")",
+      "Bash(python -c \"import fastapi, starlette; print\\('fastapi', fastapi.__version__\\); print\\('starlette', starlette.__version__\\)\")"
     ]
   }
 }

@@ -12,13 +12,14 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import socket
 import uuid
 from contextlib import suppress
 from datetime import datetime, timezone
 from typing import Any, AsyncGenerator
 
 import httpx
-from fastapi import Depends, FastAPI, HTTPException
+from fastapi import Depends, FastAPI, Header, HTTPException, Request, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, StreamingResponse
 from pydantic import BaseModel, Field, ValidationError
@@ -27,9 +28,11 @@ import extraction
 import game_rules
 import memory
 import model_resolver
+import preference_merger
 import preference_logic
 import preference_store
 import prompt_builder
+import session_manager
 import state_manager
 import summarizer
 from logging_config import campaign_id_ctx, configure_logging, request_id_ctx
@@ -50,6 +53,8 @@ from schema import (
     ModelConfig,
     NPC,
     Player,
+    PlayerCharacter,
+    PlayerSlot,
     ReversalPatch,
     Role,
     SamplingOverrides,
@@ -69,7 +74,17 @@ app.add_middleware(
         "http://127.0.0.1:5173",
         "http://[::1]:5173",
     ],
-    allow_origin_regex=r"^http://(localhost|127\.0\.0\.1|\[::1\]):\d+$",
+    # Allow loopback plus RFC1918 private-network LAN IPs so multiplayer guests
+    # on the same network can reach the API. Internet-mode tunnel hostnames
+    # (ngrok, Cloudflare) require their own CORS configuration via that tunnel.
+    allow_origin_regex=(
+        r"^http://("
+        r"localhost|127\.0\.0\.1|\[::1\]|"
+        r"10\.\d{1,3}\.\d{1,3}\.\d{1,3}|"
+        r"192\.168\.\d{1,3}\.\d{1,3}|"
+        r"172\.(1[6-9]|2\d|3[0-1])\.\d{1,3}\.\d{1,3}"
+        r"):\d+$"
+    ),
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -112,6 +127,7 @@ async def request_id_middleware(request, call_next):
 async def _startup() -> None:
     await state_manager.initialize()
     await preference_store.initialize()
+    await session_manager.initialize()
     memory.purge_deleted_memory_artifacts()
     log.info("Tavern Tales backend started (schema v%d).", SCHEMA_VERSION)
 
@@ -224,6 +240,25 @@ class ExportFantasyRequest(BaseModel):
     password: str | None = Field(default=None, min_length=1, max_length=512)
 
 
+class CreateSessionRequest(BaseModel):
+    campaign_id: str
+    host_character: dict[str, Any] | None = None
+    reconnect_window_seconds: int = Field(default=300, ge=30, le=86_400)
+
+
+class LeaveSessionRequest(BaseModel):
+    slot: PlayerSlot
+
+
+class UpdateSessionCharacterRequest(BaseModel):
+    slot: PlayerSlot
+    name: str | None = Field(default=None, max_length=80)
+    gender: str | None = Field(default=None, max_length=40)
+    appearance: str | None = Field(default=None, max_length=600)
+    description: str | None = Field(default=None, max_length=1200)
+    location: str | None = Field(default=None, max_length=200)
+
+
 # ---------------------------------------------------------------------------
 # Root / diagnostics
 # ---------------------------------------------------------------------------
@@ -232,6 +267,30 @@ class ExportFantasyRequest(BaseModel):
 @app.get("/")
 def read_root():
     return {"status": "Tavern Tales backend is running.", "schema_version": SCHEMA_VERSION}
+
+
+def _detect_lan_ip() -> str:
+    """Best-effort active LAN address detection with localhost fallback."""
+    try:
+        with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as sock:
+            sock.connect(("8.8.8.8", 80))
+            return sock.getsockname()[0]
+    except OSError:
+        return "127.0.0.1"
+
+
+@app.get("/api/server/info")
+def get_server_info(request: Request):
+    host_header = request.headers.get("host", "")
+    port = 8000
+    if ":" in host_header and not host_header.startswith("["):
+        with suppress(ValueError):
+            port = int(host_header.rsplit(":", 1)[1])
+    return {
+        "lan_ip": _detect_lan_ip(),
+        "port": port,
+        "version": f"schema-v{SCHEMA_VERSION}",
+    }
 
 
 @app.get("/api/models")
@@ -623,18 +682,26 @@ async def rename_campaign(campaign_id: str, req: RenameCampaignRequest):
 
 
 @app.get("/api/state/{campaign_id}")
-async def get_state(campaign_id: str):
+async def get_state(campaign_id: str, x_player_slot: str | None = Header(default=None)):
     campaign_id_ctx.set(campaign_id)
     state = await state_manager.load_state(campaign_id)
     if state is None:
         raise HTTPException(404, "campaign not found")
+    _ensure_host_state_access(state, x_player_slot)
     return state.model_dump(mode="json")
 
 
 @app.put("/api/state/{campaign_id}")
-async def override_state(campaign_id: str, body: dict):
+async def override_state(
+    campaign_id: str,
+    body: dict,
+    x_player_slot: str | None = Header(default=None),
+):
     """Director-mode override. Validates full state via Pydantic (B4)."""
     campaign_id_ctx.set(campaign_id)
+    existing = await state_manager.load_state(campaign_id)
+    if existing is not None:
+        _ensure_host_state_access(existing, x_player_slot)
     body["campaign_id"] = campaign_id
     body.setdefault("schema_version", SCHEMA_VERSION)
     try:
@@ -647,11 +714,16 @@ async def override_state(campaign_id: str, body: dict):
 
 
 @app.patch("/api/state/{campaign_id}")
-async def patch_state(campaign_id: str, req: DirectorPatchRequest):
+async def patch_state(
+    campaign_id: str,
+    req: DirectorPatchRequest,
+    x_player_slot: str | None = Header(default=None),
+):
     """Narrow Director-mode patch with optimistic revision checking."""
     campaign_id_ctx.set(campaign_id)
 
     async def _apply(state: CampaignState) -> CampaignState:
+        _ensure_host_state_access(state, x_player_slot)
         if req.expected_revision is not None and state.revision != req.expected_revision:
             raise HTTPException(409, {
                 "message": "campaign state changed; refresh before applying this edit",
@@ -711,6 +783,454 @@ async def fork_campaign(campaign_id: str):
     await state_manager.save_state(clone)
     memory.duplicate_campaign_memory(campaign_id, new_id)
     return {"status": "success", "new_campaign_id": new_id}
+
+
+# ---------------------------------------------------------------------------
+# Multiplayer sessions
+# ---------------------------------------------------------------------------
+
+
+def _require_host_slot(x_player_slot: str | None) -> None:
+    if x_player_slot != PlayerSlot.HOST.value:
+        raise HTTPException(403, "host slot required")
+
+
+def _ensure_host_state_access(state: CampaignState, x_player_slot: str | None) -> None:
+    if state.multiplayer is not None and x_player_slot != PlayerSlot.HOST.value:
+        raise HTTPException(403, "multiplayer campaign state is host-only")
+
+
+def _host_character_from_state(
+    state: CampaignState,
+    payload: dict[str, Any] | None,
+) -> PlayerCharacter:
+    if payload is not None:
+        data = dict(payload)
+        data["slot"] = PlayerSlot.HOST
+        return PlayerCharacter.model_validate(data)
+
+    p = state.player
+    return PlayerCharacter(
+        slot=PlayerSlot.HOST,
+        name=p.name,
+        location=p.location,
+        gender=p.gender,
+        appearance=p.appearance,
+        description=p.description,
+        stats=dict(p.stats),
+        inventory=list(p.inventory),
+    )
+
+
+def _session_join_url(request: Request, room_code: str) -> str:
+    lan_ip = _detect_lan_ip()
+    host = request.headers.get("host", "")
+    port = "8000"
+    if ":" in host and not host.startswith("["):
+        port = host.rsplit(":", 1)[1]
+    return f"http://{lan_ip}:{port}/?room_code={room_code}"
+
+
+def _profile_from_json(raw: dict[str, Any] | None) -> UserPreferenceProfile | None:
+    if raw is None:
+        return None
+    return UserPreferenceProfile.model_validate(raw)
+
+
+async def _refresh_merged_preferences(rt: session_manager.SessionRuntime):
+    host_profile = None
+    guest_profile = None
+    host = rt.players.get(PlayerSlot.HOST)
+    guest = rt.players.get(PlayerSlot.GUEST)
+    if host is not None and host.preference_profile_json is not None:
+        host_profile = _profile_from_json(host.preference_profile_json)
+    if guest is not None and guest.preference_profile_json is not None:
+        guest_profile = _profile_from_json(guest.preference_profile_json)
+
+    context = preference_merger.merge_preferences(host_profile, guest_profile)
+
+    async def _apply(st: CampaignState) -> CampaignState:
+        if st.multiplayer is not None:
+            st.multiplayer.merged_preference_context = context
+        return st
+
+    await state_manager.mutate_state(rt.campaign_id, _apply)
+    return context
+
+
+async def _session_payload(rt: session_manager.SessionRuntime) -> dict[str, Any]:
+    state = await state_manager.load_state(rt.campaign_id)
+    multiplayer = state.multiplayer if state is not None else None
+    merged = multiplayer.merged_preference_context if multiplayer is not None else None
+    return {
+        "session_state": rt.public_state(),
+        "multiplayer": multiplayer.model_dump(mode="json") if multiplayer is not None else None,
+        "merged_preferences": merged.model_dump(mode="json") if merged is not None else None,
+        "merged_preference_summary": (
+            preference_merger.merge_summary(merged) if merged is not None else None
+        ),
+    }
+
+
+async def _broadcast_session_state(rt: session_manager.SessionRuntime) -> None:
+    await session_manager.broadcast(rt, {"type": "session_state", **await _session_payload(rt)})
+
+
+async def _send_ws_error(
+    websocket: WebSocket,
+    message: str,
+    code: str = "bad_request",
+) -> None:
+    await websocket.send_json({"type": "error", "message": message, "code": code})
+
+
+def _coerce_slot(value: Any) -> PlayerSlot | None:
+    if value in (None, ""):
+        return None
+    try:
+        return PlayerSlot(str(value))
+    except ValueError:
+        return None
+
+
+@app.post("/api/session/create")
+async def create_multiplayer_session(req: CreateSessionRequest, request: Request):
+    campaign_id_ctx.set(req.campaign_id)
+    state = await state_manager.load_state(req.campaign_id)
+    if state is None:
+        raise HTTPException(404, "campaign not found")
+
+    try:
+        host_character = _host_character_from_state(state, req.host_character)
+        rt = await session_manager.create_session(
+            req.campaign_id,
+            host_character,
+            reconnect_window_seconds=req.reconnect_window_seconds,
+        )
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    except ValidationError as e:
+        raise HTTPException(422, e.errors())
+
+    payload = await _session_payload(rt)
+    lan_ip = _detect_lan_ip()
+    return {
+        "room_code": rt.room_code,
+        "join_url": _session_join_url(request, rt.room_code),
+        "lan_ip": lan_ip,
+        **payload,
+    }
+
+
+@app.get("/api/session/{room_code}/state")
+async def get_multiplayer_session_state(room_code: str):
+    rt = await session_manager.get_session(room_code)
+    if rt is None:
+        raise HTTPException(404, "session not found")
+    return await _session_payload(rt)
+
+
+@app.post("/api/session/{room_code}/character")
+async def update_multiplayer_character(room_code: str, req: UpdateSessionCharacterRequest):
+    try:
+        rt = await session_manager.update_character(
+            room_code,
+            req.slot,
+            name=req.name,
+            gender=req.gender,
+            appearance=req.appearance,
+            description=req.description,
+            location=req.location,
+        )
+        await _broadcast_session_state(rt)
+        return await _session_payload(rt)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+
+
+@app.post("/api/session/{room_code}/leave")
+async def leave_multiplayer_session(room_code: str, req: LeaveSessionRequest):
+    rt = await session_manager.mark_disconnected(room_code, req.slot)
+    if rt is None:
+        raise HTTPException(404, "session not found")
+    deadline = None
+    if rt.paused_since is not None:
+        deadline = (
+            rt.paused_since.timestamp() + rt.reconnect_window_seconds
+        )
+    await session_manager.broadcast(
+        rt,
+        {
+            "type": "session_paused",
+            "disconnected_slot": req.slot.value,
+            "reconnect_deadline": deadline,
+        },
+    )
+    await _broadcast_session_state(rt)
+    return await _session_payload(rt)
+
+
+@app.post("/api/session/{room_code}/archive")
+async def archive_multiplayer_session(
+    room_code: str,
+    x_player_slot: str | None = Header(default=None),
+):
+    _require_host_slot(x_player_slot)
+    rt = await session_manager.get_session(room_code)
+    if rt is None:
+        raise HTTPException(404, "session not found")
+    await session_manager.broadcast(rt, {"type": "session_archived", "reason": "host_archived"})
+    archived = await session_manager.archive_session(room_code)
+    return await _session_payload(archived)
+
+
+@app.delete("/api/session/{room_code}")
+async def delete_multiplayer_session(
+    room_code: str,
+    x_player_slot: str | None = Header(default=None),
+):
+    _require_host_slot(x_player_slot)
+    rt = await session_manager.get_session(room_code)
+    if rt is None:
+        raise HTTPException(404, "session not found")
+    await session_manager.broadcast(rt, {"type": "session_archived", "reason": "host_deleted"})
+    campaign_id = rt.campaign_id
+    deleted = await session_manager.delete_session(room_code)
+    memory.delete_campaign_memory(campaign_id)
+    _LAST_PROMPT.pop(campaign_id, None)
+    return {"status": "success" if deleted else "not_found"}
+
+
+@app.post("/api/session/{room_code}/export")
+async def export_multiplayer_narrative(room_code: str):
+    rt = await session_manager.get_session(room_code)
+    if rt is None:
+        raise HTTPException(404, "session not found")
+    state = await state_manager.load_state(rt.campaign_id)
+    if state is None:
+        raise HTTPException(404, "campaign not found")
+
+    turns = [
+        {
+            "turn_id": msg.turn_id,
+            "timestamp": msg.timestamp,
+            "content": msg.content,
+        }
+        for msg in state.messages
+        if msg.role == Role.ASSISTANT
+    ]
+    narrative = "\n\n".join(t["content"] for t in turns)
+    return {
+        "room_code": room_code.upper(),
+        "campaign_id": rt.campaign_id,
+        "turns": turns,
+        "narrative": narrative,
+    }
+
+
+@app.websocket("/api/session/{room_code}/ws")
+async def multiplayer_session_ws(websocket: WebSocket, room_code: str):
+    await websocket.accept()
+    rt: session_manager.SessionRuntime | None = None
+    player_slot: PlayerSlot | None = None
+
+    try:
+        first = await websocket.receive_json()
+        msg_type = first.get("type")
+        if msg_type not in {"join", "reconnect"}:
+            await _send_ws_error(websocket, "first message must be join or reconnect", "join_required")
+            await websocket.close(code=1008)
+            return
+
+        desired_slot = _coerce_slot(first.get("slot")) if msg_type == "reconnect" else _coerce_slot(first.get("slot"))
+        if msg_type == "reconnect" and desired_slot is None:
+            await _send_ws_error(websocket, "reconnect requires slot", "slot_required")
+            await websocket.close(code=1008)
+            return
+
+        preference_profile = first.get("preference_profile")
+        if preference_profile is not None:
+            _profile_from_json(preference_profile)
+
+        try:
+            rt, player = await session_manager.join_session(
+                room_code,
+                websocket=websocket,
+                display_name=str(first.get("display_name") or ""),
+                character_name=str(first.get("character_name") or ""),
+                preference_profile_json=preference_profile,
+                preference_source=str(first.get("preference_source") or "none"),
+                desired_slot=desired_slot,
+            )
+        except ValueError as e:
+            await _send_ws_error(websocket, str(e), "join_failed")
+            await websocket.close(code=1008)
+            return
+
+        player_slot = player.slot
+        await _refresh_merged_preferences(rt)
+        if msg_type == "reconnect":
+            await session_manager.broadcast(rt, {"type": "session_resumed", "slot": player_slot.value})
+        else:
+            await session_manager.broadcast(
+                rt,
+                {
+                    "type": "player_joined",
+                    "slot": player_slot.value,
+                    "display_name": player.display_name,
+                    "character_name": player.character_name,
+                },
+            )
+        await _broadcast_session_state(rt)
+
+        while True:
+            incoming = await websocket.receive_json()
+            msg_type = incoming.get("type")
+
+            if msg_type in {"ready", "unready"}:
+                before_status = rt.status
+                rt = await session_manager.set_ready(
+                    rt.room_code,
+                    player_slot,
+                    is_ready=(msg_type == "ready"),
+                )
+                await _refresh_merged_preferences(rt)
+                await session_manager.broadcast(
+                    rt,
+                    {
+                        "type": "player_ready",
+                        "slot": player_slot.value,
+                        "is_ready": msg_type == "ready",
+                    },
+                )
+                if rt.status != before_status:
+                    active = session_manager.current_active_slot(rt)
+                    await session_manager.broadcast(
+                        rt,
+                        {"type": "floor_passed", "active_slot": active.value if active else None},
+                    )
+                await _broadcast_session_state(rt)
+
+            elif msg_type == "submit_action":
+                try:
+                    rt, result = await session_manager.submit_action(
+                        rt.room_code,
+                        player_slot,
+                        str(incoming.get("text") or ""),
+                    )
+                except ValueError as e:
+                    await _send_ws_error(websocket, str(e), "not_your_turn" if "not your turn" in str(e) else "submit_failed")
+                    continue
+
+                await session_manager.broadcast_except(
+                    rt,
+                    player_slot,
+                    {"type": "partner_submitted", "active_slot": player_slot.value},
+                )
+                active = session_manager.current_active_slot(rt)
+                if result == "ready_to_generate":
+                    await session_manager.broadcast(
+                        rt,
+                        {"type": "generation_start", "turn_number": rt.turn_number},
+                    )
+                    # Spawn the AI turn so the WS remains responsive to OOC and
+                    # disconnect events while the model is generating.
+                    asyncio.create_task(_run_multiplayer_turn(rt.room_code))
+                else:
+                    await session_manager.broadcast(
+                        rt,
+                        {"type": "floor_passed", "active_slot": active.value if active else None},
+                    )
+                await _broadcast_session_state(rt)
+
+            elif msg_type == "composing":
+                active = session_manager.current_active_slot(rt)
+                if active == player_slot:
+                    await session_manager.broadcast_except(
+                        rt,
+                        player_slot,
+                        {"type": "partner_composing", "active_slot": player_slot.value},
+                    )
+
+            elif msg_type == "ooc_message":
+                text = str(incoming.get("text") or "").strip()
+                if not text:
+                    continue
+                text = text[:session_manager.MAX_OOC_MESSAGE_LEN]
+                player = rt.players.get(player_slot)
+                await session_manager.broadcast(
+                    rt,
+                    {
+                        "type": "ooc_message",
+                        "slot": player_slot.value,
+                        "display_name": player.display_name if player else player_slot.value,
+                        "text": text,
+                    },
+                )
+
+            elif msg_type == "update_character":
+                rt = await session_manager.update_character(
+                    rt.room_code,
+                    player_slot,
+                    name=incoming.get("name"),
+                    gender=incoming.get("gender"),
+                    appearance=incoming.get("appearance"),
+                    description=incoming.get("description"),
+                    location=incoming.get("location"),
+                )
+                await _broadcast_session_state(rt)
+
+            elif msg_type == "archive_session":
+                if player_slot != PlayerSlot.HOST:
+                    await _send_ws_error(websocket, "host slot required", "host_only")
+                    continue
+                await session_manager.broadcast(rt, {"type": "session_archived", "reason": "host_archived"})
+                await session_manager.archive_session(rt.room_code)
+                await websocket.close(code=1000)
+                return
+
+            elif msg_type == "delete_session":
+                if player_slot != PlayerSlot.HOST:
+                    await _send_ws_error(websocket, "host slot required", "host_only")
+                    continue
+                await session_manager.broadcast(rt, {"type": "session_archived", "reason": "host_deleted"})
+                campaign_id = rt.campaign_id
+                await session_manager.delete_session(rt.room_code)
+                memory.delete_campaign_memory(campaign_id)
+                _LAST_PROMPT.pop(campaign_id, None)
+                await websocket.close(code=1000)
+                return
+
+            elif msg_type == "eject_guest":
+                if player_slot != PlayerSlot.HOST:
+                    await _send_ws_error(websocket, "host slot required", "host_only")
+                    continue
+                rt = await session_manager.eject_guest(rt.room_code)
+                await session_manager.broadcast(rt, {"type": "player_ejected", "slot": PlayerSlot.GUEST.value})
+                await _broadcast_session_state(rt)
+
+            else:
+                await _send_ws_error(websocket, f"unknown message type: {msg_type}", "unknown_type")
+
+    except WebSocketDisconnect:
+        if rt is not None and player_slot is not None:
+            paused = await session_manager.mark_disconnected(rt.room_code, player_slot)
+            if paused is not None:
+                deadline = None
+                if paused.paused_since is not None:
+                    deadline = paused.paused_since.timestamp() + paused.reconnect_window_seconds
+                await session_manager.broadcast(
+                    paused,
+                    {
+                        "type": "session_paused",
+                        "disconnected_slot": player_slot.value,
+                        "reconnect_deadline": deadline,
+                    },
+                )
+                await _broadcast_session_state(paused)
+    except ValidationError as e:
+        await _send_ws_error(websocket, str(e), "validation_error")
+        await websocket.close(code=1008)
 
 
 # ---------------------------------------------------------------------------
@@ -891,6 +1411,256 @@ async def _run_chat_stream(
                 gm_msg_id=gm_msg_id,
                 gm_text=gm_text,
             ))
+
+
+async def _background_after_multiplayer_turn(
+    campaign_id: str,
+    host_action: str,
+    guest_action: str,
+    gm_msg_id: str,
+    gm_text: str,
+) -> None:
+    """Per-slot extraction + memory + summary cadence for a multiplayer round."""
+    campaign_id_ctx.set(campaign_id)
+
+    gm_excerpt = gm_text.strip()
+    if len(gm_excerpt) > 900:
+        gm_excerpt = gm_excerpt[:900].rsplit(" ", 1)[0] + " [truncated]"
+
+    async def _apply(state: CampaignState) -> CampaignState:
+        side = state.side_effects.setdefault(gm_msg_id, MessageSideEffects())
+        side.status = "pending"
+        side.error = ""
+        side.extra_reversals = []
+
+        try:
+            mp = state.multiplayer
+            host_name = mp.host_character.name if mp is not None else "Host"
+            guest_name = (
+                mp.guest_character.name
+                if mp is not None and mp.guest_character is not None
+                else "Guest"
+            )
+            host_loc = mp.host_character.location if mp is not None else state.player.location
+            mem_content = (
+                "Multiplayer event memory\n"
+                f"{host_name} action: {host_action}\n"
+                f"{guest_name} action: {guest_action}\n"
+                f"Outcome: {gm_excerpt}"
+            )
+            mem_id = memory.add_memory(
+                campaign_id,
+                gm_msg_id,
+                mem_content,
+                turn=len(state.messages),
+                kind="event",
+                location=host_loc,
+            )
+            side.memory_ids.append(mem_id)
+
+            host_delta = await extraction.extract_state_changes_for_slot(
+                state, PlayerSlot.HOST, host_action, gm_text
+            )
+            host_reversal = state_manager.apply_state_delta(state, host_delta, PlayerSlot.HOST)
+            side.reversal = ReversalPatch.model_validate(host_reversal)
+
+            if mp is not None and mp.guest_character is not None:
+                guest_delta = await extraction.extract_state_changes_for_slot(
+                    state, PlayerSlot.GUEST, guest_action, gm_text
+                )
+                guest_reversal = state_manager.apply_state_delta(state, guest_delta, PlayerSlot.GUEST)
+                side.extra_reversals.append(ReversalPatch.model_validate(guest_reversal))
+
+            await summarizer.maybe_summarize(state)
+            side.status = "complete"
+            state_manager.record_event(
+                state,
+                "turn.postprocess.complete",
+                f"Multiplayer post-turn updates complete for {gm_msg_id}.",
+            )
+        except Exception as e:
+            side.status = "failed"
+            side.error = str(e)
+            state_manager.record_event(
+                state,
+                "turn.postprocess.failed",
+                f"Multiplayer post-turn updates failed for {gm_msg_id}: {e}",
+            )
+            log.exception("Multiplayer post-turn work failed for msg=%s", gm_msg_id)
+        return state
+
+    await state_manager.mutate_state(campaign_id, _apply)
+
+
+async def _run_multiplayer_turn(room_code: str) -> None:
+    """Drive one full AI turn for a multiplayer session.
+
+    Triggered by the WS handler after both players have submitted. Acquires the
+    campaign turn lock, builds the combined prompt, streams tokens to all
+    connected clients, and persists results. On completion, advances the
+    session to the next round.
+    """
+    rt = await session_manager.get_session(room_code)
+    if rt is None:
+        log.warning("Multiplayer turn invoked for missing room %s", room_code)
+        return
+
+    campaign_id = rt.campaign_id
+    campaign_id_ctx.set(campaign_id)
+
+    actions = await session_manager.consume_pending_actions(room_code)
+    host_action = actions.get(PlayerSlot.HOST, "")
+    guest_action = actions.get(PlayerSlot.GUEST, "")
+    if not host_action or not guest_action:
+        log.warning("Multiplayer turn started without both actions; aborting.")
+        await session_manager.broadcast(
+            rt,
+            {"type": "error", "message": "missing one or both player actions", "code": "missing_actions"},
+        )
+        await session_manager.begin_next_round(room_code)
+        return
+
+    async with state_manager.turn_lock(campaign_id):
+        state = await state_manager.load_state(campaign_id)
+        if state is None or state.multiplayer is None:
+            await session_manager.broadcast(
+                rt,
+                {"type": "error", "message": "campaign missing or not multiplayer", "code": "campaign_missing"},
+            )
+            return
+
+        mp = state.multiplayer
+        host_name = mp.host_character.name or "Host"
+        guest_name = (mp.guest_character.name if mp.guest_character is not None else "Guest")
+        starter = rt.starting_slot_this_round.value
+
+        combined = prompt_builder.format_multiplayer_user_message(
+            host_name=host_name,
+            host_action=host_action,
+            guest_name=guest_name,
+            guest_action=guest_action,
+            starter_slot=starter,
+        )
+
+        memories = memory.retrieve_relevant_memories(campaign_id, combined, n_results=4)
+        # game_rules.resolve_action runs against the host character today; in v1
+        # we let it derive a single resolution from the combined text.
+        action_resolution = game_rules.resolve_action(state, combined)
+        turn_context = game_rules.render_resolution(action_resolution)
+
+        built = prompt_builder.build_prompt(
+            state=state,
+            user_message=combined,
+            retrieved_memories=memories,
+            turn_context=turn_context,
+        )
+        _LAST_PROMPT[campaign_id] = {
+            "system_prompt": built.system_prompt,
+            "stats": built.stats.model_dump(),
+            "memories": memories,
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+        }
+
+        buf: list[str] = []
+        stop_reason = "stop"
+        error: str | None = None
+
+        try:
+            async for event in stream_chat(
+                built.messages,
+                model=state.models.gm,
+                overrides=state.sampling_overrides,
+            ):
+                et = event.get("type")
+                if et == "token":
+                    chunk = event["data"]
+                    buf.append(chunk)
+                    await session_manager.broadcast(rt, {"type": "token", "text": chunk})
+                elif et == "error":
+                    error = event.get("data") or "unknown error"
+                    await session_manager.broadcast(rt, {"type": "error", "message": error, "code": "stream_error"})
+                elif et == "done":
+                    stop_reason = event.get("stop_reason", "stop")
+        except Exception as e:
+            error = str(e)
+            log.exception("Multiplayer stream failed for room %s", room_code)
+            await session_manager.broadcast(
+                rt, {"type": "error", "message": error, "code": "stream_exception"}
+            )
+
+        gm_text = "".join(buf).strip()
+        partial = stop_reason == "length" or (error is not None and bool(gm_text))
+        turn_id = f"turn_{uuid.uuid4().hex[:12]}"
+
+        gm_msg_id: str | None = None
+
+        if gm_text:
+            async def _persist(st: CampaignState) -> CampaignState:
+                import schema as _schema
+
+                # Two attributed user messages share the turn_id so the existing
+                # delete-by-turn semantics still cleanly remove the whole round.
+                st.messages.append(
+                    _schema.Message(
+                        turn_id=turn_id,
+                        role=Role.USER,
+                        content=host_action,
+                        player_slot="host",
+                    )
+                )
+                st.messages.append(
+                    _schema.Message(
+                        turn_id=turn_id,
+                        role=Role.USER,
+                        content=guest_action,
+                        player_slot="guest",
+                    )
+                )
+                gm_msg = _schema.Message(
+                    turn_id=turn_id,
+                    role=Role.ASSISTANT,
+                    content=gm_text,
+                    partial=partial,
+                )
+                st.messages.append(gm_msg)
+                st.side_effects.setdefault(gm_msg.id, MessageSideEffects(status="pending"))
+                state_manager.record_event(
+                    st,
+                    "turn.multiplayer.complete",
+                    f"Multiplayer round {rt.turn_number} saved (msg={gm_msg.id}, stop={stop_reason}).",
+                )
+                return st
+
+            new_state = await state_manager.mutate_state(campaign_id, _persist)
+            if new_state is not None:
+                gm_msg_id = new_state.messages[-1].id
+
+    next_rt = await session_manager.begin_next_round(room_code)
+    next_active = session_manager.current_active_slot(next_rt)
+    await session_manager.broadcast(
+        next_rt,
+        {
+            "type": "generation_done",
+            "turn_number": next_rt.turn_number,
+            "turn_id": turn_id,
+            "gm_msg_id": gm_msg_id,
+            "stop_reason": stop_reason,
+            "partial": partial,
+            "next_active_slot": next_active.value if next_active else None,
+        },
+    )
+    await _broadcast_session_state(next_rt)
+
+    if gm_msg_id and gm_text:
+        asyncio.create_task(
+            _background_after_multiplayer_turn(
+                campaign_id=campaign_id,
+                host_action=host_action,
+                guest_action=guest_action,
+                gm_msg_id=gm_msg_id,
+                gm_text=gm_text,
+            )
+        )
 
 
 @app.post("/api/chat/stream", dependencies=[Depends(chat_rate_limit)])

@@ -1,24 +1,52 @@
 const LOCAL_HOSTS = new Set(['localhost', '127.0.0.1', '::1']);
 
+function isPrivateIp(hostname) {
+  if (LOCAL_HOSTS.has(hostname)) return true;
+  if (/^10\.\d{1,3}\.\d{1,3}\.\d{1,3}$/.test(hostname)) return true;
+  if (/^192\.168\.\d{1,3}\.\d{1,3}$/.test(hostname)) return true;
+  if (/^172\.(1[6-9]|2\d|3[0-1])\.\d{1,3}\.\d{1,3}$/.test(hostname)) return true;
+  return false;
+}
+
 function resolveApiBase() {
-  const fallback = 'http://127.0.0.1:8000';
-  const configured = import.meta.env.VITE_API_BASE || fallback;
-  try {
-    const parsed = new URL(configured, window.location.origin);
-    if (!LOCAL_HOSTS.has(parsed.hostname)) {
-      console.warn(`Ignoring non-local VITE_API_BASE (${parsed.origin}); using ${fallback}`);
-      return fallback;
+  const configured = import.meta.env.VITE_API_BASE;
+  if (configured) {
+    try {
+      const parsed = new URL(configured, window.location.origin);
+      if (!isPrivateIp(parsed.hostname)) {
+        console.warn(`Ignoring non-local VITE_API_BASE (${parsed.origin}); deriving from window.location instead.`);
+      } else {
+        return parsed.origin;
+      }
+    } catch {
+      // fall through to window.location-based default
     }
-    return parsed.origin;
-  } catch {
-    return fallback;
   }
+
+  // Default: same hostname as the loaded page, port 8000. This makes a guest
+  // browser loading the SPA at http://192.168.1.5:5173 talk to the host's
+  // backend at http://192.168.1.5:8000 without extra configuration.
+  try {
+    const here = new URL(window.location.origin);
+    if (isPrivateIp(here.hostname)) {
+      return `${here.protocol}//${here.hostname}:8000`;
+    }
+  } catch {
+    // ignore
+  }
+  return 'http://127.0.0.1:8000';
 }
 
 export const API_BASE = resolveApiBase();
 
 export function apiUrl(path) {
   return `${API_BASE}${path}`;
+}
+
+export function wsUrl(path) {
+  // Reuse the API_BASE host/port, swap http(s) → ws(s).
+  const base = API_BASE.replace(/^http/, 'ws');
+  return `${base}${path}`;
 }
 
 function delay(ms) {
