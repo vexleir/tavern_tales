@@ -58,6 +58,7 @@ from schema import (
     ReversalPatch,
     Role,
     SamplingOverrides,
+    SessionStatus,
     StatBound,
 )
 from secure_storage import SecureStorageError, export_local_key_backup, password_encrypt_text
@@ -66,6 +67,7 @@ configure_logging()
 log = logging.getLogger(__name__)
 
 app = FastAPI(title="Tavern Tales Reborn GM Engine")
+WEBSOCKET_DISCONNECT_GRACE_SECONDS = 2.0
 
 app.add_middleware(
     CORSMiddleware,
@@ -962,14 +964,15 @@ async def leave_multiplayer_session(room_code: str, req: LeaveSessionRequest):
         deadline = (
             rt.paused_since.timestamp() + rt.reconnect_window_seconds
         )
-    await session_manager.broadcast(
-        rt,
-        {
-            "type": "session_paused",
-            "disconnected_slot": req.slot.value,
-            "reconnect_deadline": deadline,
-        },
-    )
+    if rt.status == SessionStatus.PAUSED:
+        await session_manager.broadcast(
+            rt,
+            {
+                "type": "session_paused",
+                "disconnected_slot": req.slot.value,
+                "reconnect_deadline": deadline,
+            },
+        )
     await _broadcast_session_state(rt)
     return await _session_payload(rt)
 
@@ -1014,15 +1017,29 @@ async def export_multiplayer_narrative(room_code: str):
     if state is None:
         raise HTTPException(404, "campaign not found")
 
-    turns = [
-        {
+    def _actor_name(slot: str | None) -> str:
+        if state.multiplayer is None:
+            return ""
+        if slot == PlayerSlot.HOST.value:
+            return state.multiplayer.host_character.name or "Host"
+        if slot == PlayerSlot.GUEST.value and state.multiplayer.guest_character is not None:
+            return state.multiplayer.guest_character.name or "Guest"
+        return ""
+
+    turns = []
+    for msg in state.messages:
+        if msg.role != Role.ASSISTANT:
+            continue
+        turns.append({
+            "id": msg.id,
             "turn_id": msg.turn_id,
             "timestamp": msg.timestamp,
             "content": msg.content,
-        }
-        for msg in state.messages
-        if msg.role == Role.ASSISTANT
-    ]
+            "is_kickoff": msg.is_kickoff,
+            "partial": msg.partial,
+            "player_slot": msg.player_slot,
+            "actor_name": _actor_name(msg.player_slot),
+        })
     narrative = "\n\n".join(t["content"] for t in turns)
     return {
         "room_code": room_code.upper(),
@@ -1222,23 +1239,34 @@ async def multiplayer_session_ws(websocket: WebSocket, room_code: str):
 
     except WebSocketDisconnect:
         if rt is not None and player_slot is not None:
+            # Fast reloads and transient socket swaps can close the old socket
+            # after the same slot has already opened a replacement.
+            await asyncio.sleep(WEBSOCKET_DISCONNECT_GRACE_SECONDS)
             paused = await session_manager.mark_disconnected(
                 rt.room_code,
                 player_slot,
                 connection_id=player_connection_id,
             )
             if paused is not None:
+                current = paused.players.get(player_slot)
+                if (
+                    current is not None
+                    and current.is_connected
+                    and current.connection_id != player_connection_id
+                ):
+                    return
                 deadline = None
                 if paused.paused_since is not None:
                     deadline = paused.paused_since.timestamp() + paused.reconnect_window_seconds
-                await session_manager.broadcast(
-                    paused,
-                    {
-                        "type": "session_paused",
-                        "disconnected_slot": player_slot.value,
-                        "reconnect_deadline": deadline,
-                    },
-                )
+                if paused.status == SessionStatus.PAUSED:
+                    await session_manager.broadcast(
+                        paused,
+                        {
+                            "type": "session_paused",
+                            "disconnected_slot": player_slot.value,
+                            "reconnect_deadline": deadline,
+                        },
+                    )
                 await _broadcast_session_state(paused)
     except ValidationError as e:
         await _send_ws_error(websocket, str(e), "validation_error")
@@ -1559,7 +1587,7 @@ async def _run_multiplayer_turn(room_code: str) -> None:
         )
 
         memories = memory.retrieve_relevant_memories(campaign_id, user_message, n_results=4)
-        action_resolution = game_rules.resolve_action(state, user_message, player_slot=acting_slot)
+        action_resolution = game_rules.resolve_action(state, action_text, player_slot=acting_slot)
         turn_context = game_rules.render_resolution(action_resolution)
 
         built = prompt_builder.build_prompt(

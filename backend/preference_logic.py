@@ -320,6 +320,101 @@ def _weighted_sample(
     return selected
 
 
+def _compose_synopsis(theme_labels: list[str], identity_bits: list[str], fade_to_black: bool) -> str:
+    """One-paragraph blurb that names the selected themes and key context."""
+    if theme_labels:
+        if len(theme_labels) == 1:
+            theme_phrase = theme_labels[0].lower()
+        elif len(theme_labels) == 2:
+            theme_phrase = f"{theme_labels[0].lower()} and {theme_labels[1].lower()}"
+        else:
+            theme_phrase = (
+                ", ".join(t.lower() for t in theme_labels[:-1])
+                + f", and {theme_labels[-1].lower()}"
+            )
+        body = f"A consent-aware roleplay premise centered on {theme_phrase}."
+    else:
+        body = "A consent-aware roleplay premise built from your saved preferences."
+
+    if identity_bits:
+        body += " Profile context: " + "; ".join(identity_bits) + "."
+    if fade_to_black:
+        body += " Explicit beats use fade-to-black."
+    body += " Fantasy interest is not real-world consent."
+    return body
+
+
+def _compose_content(
+    theme_labels: list[str],
+    role_bits: list[str],
+    identity_bits: list[str],
+    intensity: IntensityPreference | None,
+    fade_to_black: bool,
+    favorites_only: bool,
+    explore_lower_interest: bool,
+    overlap_only: bool = False,
+) -> str:
+    """Multi-paragraph draft body. Editable by the user before they hand it to the GM."""
+    paragraphs: list[str] = []
+
+    opener = (
+        "This draft sketches a story-forward, non-graphic premise the GM can "
+        "expand into a full campaign. Treat the themes below as the texture of "
+        "the scene, not as actions to perform — fantasy interest is fictional "
+        "roleplay data, never real-world consent."
+    )
+    paragraphs.append(opener)
+
+    if theme_labels:
+        bullets = "\n".join(f"- {label}" for label in theme_labels)
+        paragraphs.append("Selected themes:\n" + bullets)
+    else:
+        paragraphs.append(
+            "No themes were selected, so the GM should default to slow-burn "
+            "tension, clear boundaries, and collaborative worldbuilding."
+        )
+
+    framing_bits: list[str] = []
+    if intensity is not None:
+        framing_bits.append(f"target intensity: {intensity.value}")
+    if fade_to_black:
+        framing_bits.append("fade-to-black for explicit beats")
+    if favorites_only:
+        framing_bits.append("favorites-only selection")
+    elif explore_lower_interest:
+        framing_bits.append("exploring lower-interest themes for variety")
+    if overlap_only:
+        framing_bits.append("overlap-only with stricter boundaries winning")
+    if framing_bits:
+        paragraphs.append("Framing: " + "; ".join(framing_bits) + ".")
+
+    if identity_bits:
+        paragraphs.append("Protagonist context: " + "; ".join(identity_bits) + ".")
+
+    if role_bits:
+        paragraphs.append("Role-side hints:\n" + "\n".join(f"- {bit}" for bit in role_bits))
+
+    paragraphs.append(
+        "Opening beat: begin at a quiet decision point where the protagonist "
+        "can choose how to engage. Lean into trust, tension, and negotiated "
+        "boundaries as story texture, and end the scene at a deliberate prompt "
+        "for the next move."
+    )
+
+    return "\n\n".join(paragraphs)
+
+
+def _compose_title(theme_labels: list[str], overlap_only: bool = False) -> str:
+    """Title that reads less like placeholder text than `<theme> Fantasy`."""
+    if not theme_labels:
+        return "Overlap-Compatible Premise" if overlap_only else "Preference-Guided Premise"
+    if overlap_only:
+        return f"Shared {theme_labels[0]} Premise"
+    if len(theme_labels) == 1:
+        return f"A {theme_labels[0]} Premise"
+    return f"A Premise of {theme_labels[0]} & {theme_labels[1]}"
+
+
 def build_random_fantasy(
     profile: UserPreferenceProfile,
     context: ContextType = ContextType.AI,
@@ -354,13 +449,17 @@ def build_random_fantasy(
     if profile.globalPreferences.relationshipStyle:
         identity_bits.append(f"relationship style: {profile.globalPreferences.relationshipStyle}")
 
-    title = "Preference-Guided Fantasy"
-    if selected:
-        title = f"{selected[0][1].label} Fantasy"
-
-    synopsis = (
-        "A non-graphic, story-oriented roleplay premise built from the profile's fantasy and text-roleplay "
-        "preferences. It treats real-world willingness as separate discussion data, not consent."
+    fade_to_black = profile.globalPreferences.fadeToBlack
+    title = _compose_title(labels)
+    synopsis = _compose_synopsis(labels, identity_bits, fade_to_black)
+    content = _compose_content(
+        theme_labels=labels,
+        role_bits=role_bits,
+        identity_bits=identity_bits,
+        intensity=intensity,
+        fade_to_black=fade_to_black,
+        favorites_only=favorites_only,
+        explore_lower_interest=explore_lower_interest,
     )
     seed_prompt = (
         "Create a non-graphic adult roleplay scene concept using only the structured preferences below. "

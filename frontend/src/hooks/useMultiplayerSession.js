@@ -246,6 +246,7 @@ export default function useMultiplayerSession({
     wsRef.current = ws;
 
     ws.onopen = () => {
+      if (wsRef.current !== ws) return;
       reconnectAttemptRef.current = 0;
       dispatch({ type: 'open' });
       const reconnect = reconnectSlotRef.current || assignedSlotRef.current || loadAssignedSlot(roomCode);
@@ -271,9 +272,13 @@ export default function useMultiplayerSession({
       }
     };
 
-    ws.onmessage = handleMessage;
+    ws.onmessage = (event) => {
+      if (wsRef.current !== ws) return;
+      handleMessage(event);
+    };
 
     ws.onclose = () => {
+      if (wsRef.current !== ws) return;
       dispatch({ type: 'closed' });
       wsRef.current = null;
       if (intentionalCloseRef.current) return;
@@ -289,6 +294,7 @@ export default function useMultiplayerSession({
     };
 
     ws.onerror = () => {
+      if (wsRef.current !== ws) return;
       dispatch({ type: 'error', message: 'WebSocket error — retrying.' });
     };
   }, [enabled, roomCode, handleMessage]);

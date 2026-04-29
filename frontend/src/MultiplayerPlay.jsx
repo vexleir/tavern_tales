@@ -5,13 +5,13 @@ import { apiFetch, describeApiError } from './lib/api';
  * In-game view for an active multiplayer session.
  *
  * Renders:
- *   - The narrative log (assistant messages from /api/state, plus the live
- *     streaming text from the WS hook during generation).
+ *   - The narrative log (public session export, plus the live streaming text
+ *     from the WS hook during generation).
  *   - The player's input box, locked when it's not their turn.
  *   - A turn indicator, OOC chat, and host management controls.
  */
 export default function MultiplayerPlay({
-  campaignId,
+  roomCode,
   mySlot,
   sessionState,
   multiplayer,
@@ -36,42 +36,42 @@ export default function MultiplayerPlay({
   const [loadError, setLoadError] = useState(null);
   const composingTimer = useRef(null);
 
-  // The host loads /api/state directly (it's host-only). The guest sees only
-  // the assistant narration that has been broadcast over the WS — which we
-  // approximate by storing each completed AI turn locally.
+  // Both players can reload the public multiplayer narrative from the session
+  // export endpoint. This keeps guests from losing prior turns after a refresh.
   useEffect(() => {
     let cancelled = false;
-    if (mySlot !== 'host' || !campaignId) return undefined;
+    if (!roomCode || generating) return undefined;
     (async () => {
       try {
-        const res = await apiFetch(`/api/state/${campaignId}`, {
-          headers: { 'X-Player-Slot': 'host' },
+        const res = await apiFetch(`/api/session/${encodeURIComponent(roomCode)}/export`, {
+          method: 'POST',
         });
         if (!res.ok) {
-          setLoadError('Failed to load campaign state.');
+          setLoadError('Failed to load session narrative.');
           return;
         }
         const data = await res.json();
         if (cancelled) return;
-        const turnSlots = new Map();
-        (data.messages || []).forEach((m) => {
-          if (m.role === 'user' && m.turn_id && m.player_slot) {
-            turnSlots.set(m.turn_id, m.player_slot);
-          }
-        });
-        const visible = (data.messages || [])
-          .filter((m) => m.role === 'assistant' && !m.is_kickoff)
-          .map((m) => ({
-            ...m,
-            player_slot: m.player_slot || turnSlots.get(m.turn_id) || null,
+        const visible = (data.turns || [])
+          .filter((turn) => !turn.is_kickoff)
+          .map((turn, index) => ({
+            id: turn.id || turn.turn_id || `${turn.timestamp || 'turn'}_${index}`,
+            role: 'assistant',
+            content: turn.content || '',
+            timestamp: turn.timestamp || '',
+            turn_id: turn.turn_id || null,
+            partial: Boolean(turn.partial),
+            player_slot: turn.player_slot || null,
+            actor_name: turn.actor_name || '',
           }));
         setAssistantMessages(visible);
+        setLoadError(null);
       } catch (e) {
         if (!cancelled) setLoadError(describeApiError(e));
       }
     })();
     return () => { cancelled = true; };
-  }, [mySlot, campaignId, generating]);
+  }, [roomCode, generating]);
 
   // For guests we stash the streamed text into history when the turn ends —
   // the hook resets `liveAssistantText` to '' on generation_done.
@@ -82,29 +82,39 @@ export default function MultiplayerPlay({
       lastLiveTextRef.current = liveAssistantText;
     }
     if (!generating && lastLiveTextRef.current) {
-      setAssistantMessages((prev) => [
-        ...prev,
-        {
-          id: `local_${Date.now()}`,
-          role: 'assistant',
-          content: lastLiveTextRef.current,
-          turn_id: `live_${Date.now()}`,
-          player_slot: lastCompletedGeneration?.slot || null,
-          actor_name: lastCompletedGeneration?.actorName || '',
-        },
-      ]);
+      setAssistantMessages((prev) => {
+        if (prev.some((m) => m.content === lastLiveTextRef.current)) {
+          return prev;
+        }
+        return [
+          ...prev,
+          {
+            id: `local_${Date.now()}`,
+            role: 'assistant',
+            content: lastLiveTextRef.current,
+            turn_id: `live_${Date.now()}`,
+            player_slot: lastCompletedGeneration?.slot || null,
+            actor_name: lastCompletedGeneration?.actorName || '',
+          },
+        ];
+      });
       lastLiveTextRef.current = '';
     }
   }, [mySlot, liveAssistantText, generating, lastCompletedGeneration]);
 
   const status = sessionState?.status || 'paused';
+  const players = sessionState?.players || {};
+  const bothPlayersConnected = Boolean(players.host?.is_connected && players.guest?.is_connected);
   const activeSlot = sessionState?.active_slot || null;
   const generationInProgress = generating || status === 'generating';
   const isMyTurn = activeSlot === mySlot && !generationInProgress && status !== 'paused';
   const inputLocked = !isMyTurn;
 
   const indicatorText = useMemo(() => {
-    if (status === 'paused') return 'Partner disconnected — waiting up to 5 minutes for reconnect.';
+    if (status === 'paused') {
+      if (bothPlayersConnected) return 'Both players are connected - restoring the turn state.';
+      return 'Partner disconnected - waiting up to 5 minutes for reconnect.';
+    }
     if (status === 'archived') return 'Session archived.';
     if (generationInProgress) return 'AI is writing…';
     if (status === 'lobby') return 'Returning to lobby…';
@@ -116,7 +126,7 @@ export default function MultiplayerPlay({
       : sessionState?.players?.host?.character_name) || 'Partner';
     if (partnerComposing) return `${partnerName} is composing…`;
     return `${partnerName} has the floor.`;
-  }, [status, activeSlot, mySlot, generationInProgress, partnerComposing, sessionState]);
+  }, [status, activeSlot, mySlot, generationInProgress, partnerComposing, sessionState, bothPlayersConnected]);
 
   const handleSubmit = () => {
     const text = draft.trim();

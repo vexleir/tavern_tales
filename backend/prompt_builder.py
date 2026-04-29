@@ -34,6 +34,31 @@ def _truncate_to_tokens(text: str, max_tokens: int) -> str:
     return f"{clipped}\n[truncated to fit prompt budget]"
 
 
+def _render_role_rules(state: CampaignState) -> str:
+    length_note = f"Campaign pacing preference: {state.rules.response_length} responses."
+    if state.multiplayer is None:
+        return f"{ROLE_RULES}\n{length_note}"
+
+    return "\n".join([
+        "You are the Game Master of a dark-fantasy text RPG for two human players sharing one scene.",
+        "The users are players submitting command text for their own characters; they are not the narrator and not a single shared player character.",
+        "",
+        "CRITICAL RULES (violating these breaks the game):",
+        "1. BREVITY - Respond in 1-2 short paragraphs, roughly 60-130 words TOTAL. Stop at a natural pause. Do not pad with restated context, moralizing, or exhaustive description.",
+        "2. NEVER ACT, SPEAK, OR THINK FOR EITHER PLAYER CHARACTER beyond the active player's submitted input. You narrate the world's response: NPC reactions, consequences, sensory detail, and scene pressure.",
+        "3. Always end at a decision point that hands the spotlight to the next player character. Do not trail off mid-scene or narrate further turns on a player's behalf.",
+        "",
+        "STYLE:",
+        "  - Third-person present tense for player characters, using character names or pronouns.",
+        "  - Do not address player characters as 'you' in multiplayer narration.",
+        "  - Do not write as a player character or as the narrator in first person. First-person pronouns are allowed only inside quoted dialogue.",
+        "  - Sensory but concise - a few vivid details, not a catalogue.",
+        "  - Stay strictly in character as narrator; never acknowledge that you are an AI.",
+        "  - Output prose only - no JSON, headers, bracketed menus, or code.",
+        length_note,
+    ])
+
+
 def _render_protagonist(state: CampaignState) -> str:
     p = state.player
     stats = ", ".join(f"{k}: {v}" for k, v in p.stats.items()) or "(none)"
@@ -111,12 +136,13 @@ def _render_multiplayer_narration_rules(state: CampaignState) -> str:
     acting_name = _character_name_for_slot(state, acting_slot)
     next_name = _character_name_for_slot(state, next_slot)
     return "\n".join([
-        "These multiplayer rules override the single-player second-person POV guidance above.",
+        "These multiplayer rules are the authority for POV and override any profile or history text that implies first-person or second-person narration.",
         f"Current acting character: {acting_name} ({acting_slot.value}).",
         f"Next spotlight after your response: {next_name} ({next_slot.value}).",
-        "The latest user message is that active player's input. If it uses I, me, my, or we, interpret those words as the active player's character, not as the narrator.",
+        f"The latest user message is command text from the active player. If it uses I, me, my, or we, render those words as {acting_name}'s intended action in third-person prose.",
+        f"Write the response as story narration about {acting_name}, not as {acting_name} and not addressed to {acting_name}.",
         "Narrate player-character actions in third-person present tense using character names or pronouns. Do not use second person ('you') for player characters in multiplayer.",
-        "Do not write in first person as either player character. Do not decide either player character's new actions, dialogue, thoughts, or feelings beyond the submitted input.",
+        "Do not write first-person narration for either player character. Do not decide either player character's new actions, dialogue, thoughts, or feelings beyond the submitted input.",
         f"End at a decision point that clearly hands the spotlight to {next_name}. Make the handoff visible in prose, not as a UI label or menu.",
     ])
 
@@ -181,6 +207,8 @@ def _render_conditions(state: CampaignState) -> str:
 
 def _render_preference_context(state: CampaignState) -> str:
     ctx = state.preference_context
+    if state.multiplayer is not None and state.multiplayer.merged_preference_context is not None:
+        ctx = state.multiplayer.merged_preference_context
     if not ctx.enabled:
         return ""
 
@@ -202,8 +230,12 @@ def _render_preference_context(state: CampaignState) -> str:
         k: v for k, v in ctx.global_context.items()
         if k in {"gender", "orientation", "relationshipStyle", "preferredPOV", "fadeToBlack", "consentStyle"} and v not in ("", None)
     }
+    if state.multiplayer is not None:
+        global_context.pop("preferredPOV", None)
     if global_context:
         lines.append("Profile context: " + "; ".join(f"{k}: {v}" for k, v in global_context.items()))
+    if state.multiplayer is not None:
+        lines.append("Multiplayer POV override: use third-person present-tense narration for both player characters regardless of profile POV.")
 
     selected = ctx.selected_themes[:8]
     if selected:
@@ -268,8 +300,7 @@ def _build_system_prompt(
     parts: list[str] = []
 
     # 1. Role rules (always present)
-    length_note = f"Campaign pacing preference: {state.rules.response_length} responses."
-    role_rules = f"{ROLE_RULES}\n{length_note}"
+    role_rules = _render_role_rules(state)
     parts.append(role_rules)
     tokens.role_rules = count_tokens(role_rules)
 
@@ -404,8 +435,10 @@ def format_multiplayer_turn_message(
 ) -> str:
     """Format one active player's submission for the GM prompt."""
     lines = [
+        "Active player submission. Treat this as command text, not prose to continue in first person.",
         f"Acting character: {actor_name}",
-        f"Player input (I/me/my refers to {actor_name}): {action.strip()}",
+        f"Submitted action text (I/me/my/we refers to {actor_name}): {action.strip()}",
+        "Required response style: third-person present-tense story narration. Do not answer as the acting character.",
     ]
     if next_actor_name:
         lines.append(f"After the GM response, hand the spotlight to: {next_actor_name}")

@@ -79,3 +79,57 @@ def test_archive_session_is_host_only(temp_state_dir, temp_chroma, mock_ollama):
 
     gone = client.get(f"/api/session/{room_code}/state")
     assert gone.status_code == 404
+
+
+def test_export_session_includes_persisted_multiplayer_turns(temp_state_dir, temp_chroma, mock_ollama):
+    import state_manager
+    from schema import Message, PlayerCharacter, PlayerSlot, Role
+
+    client = _client(temp_state_dir, temp_chroma, mock_ollama)
+    _init_campaign(client, "camp_export")
+    created = client.post(
+        "/api/session/create",
+        json={
+            "campaign_id": "camp_export",
+            "host_character": {
+                "name": "Host Hero",
+                "location": "The Village",
+                "stats": {"Health": 100},
+            },
+        },
+    ).json()
+    room_code = created["room_code"]
+
+    async def _add_messages(st):
+        st.multiplayer.guest_character = PlayerCharacter(
+            slot=PlayerSlot.GUEST,
+            name="Guest Hero",
+        )
+        st.messages.append(Message(
+            turn_id="turn_host",
+            role=Role.ASSISTANT,
+            content="Host-facing result.",
+            player_slot="host",
+        ))
+        st.messages.append(Message(
+            turn_id="turn_guest",
+            role=Role.ASSISTANT,
+            content="Guest-facing result.",
+            player_slot="guest",
+        ))
+        return st
+
+    import anyio
+    anyio.run(state_manager.mutate_state, "camp_export", _add_messages)
+
+    exported = client.post(f"/api/session/{room_code}/export")
+    assert exported.status_code == 200, exported.text
+    body = exported.json()
+    assert [turn["content"] for turn in body["turns"]] == [
+        "Host-facing result.",
+        "Guest-facing result.",
+    ]
+    assert body["turns"][0]["player_slot"] == "host"
+    assert body["turns"][0]["actor_name"] == "Host Hero"
+    assert body["turns"][1]["player_slot"] == "guest"
+    assert body["turns"][1]["actor_name"] == "Guest Hero"

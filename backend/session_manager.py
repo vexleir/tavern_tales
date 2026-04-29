@@ -586,11 +586,27 @@ async def _maybe_resume_from_pause(rt: SessionRuntime) -> None:
         and rt.players[PlayerSlot.HOST].is_connected
         and rt.players[PlayerSlot.GUEST].is_connected
     )
-    if both_connected and rt.paused_status_before is not None:
-        rt.status = rt.paused_status_before
-        rt.paused_status_before = None
-        rt.paused_since = None
-        await _persist_session_status(rt)
+    if not both_connected:
+        return
+
+    if rt.paused_status_before is not None:
+        restored_status = rt.paused_status_before
+    elif (
+        rt.players[PlayerSlot.HOST].is_ready
+        and rt.players[PlayerSlot.GUEST].is_ready
+    ):
+        restored_status = (
+            SessionStatus.HOST_TURN
+            if rt.starting_slot_this_round == PlayerSlot.HOST
+            else SessionStatus.GUEST_TURN
+        )
+    else:
+        restored_status = SessionStatus.LOBBY
+
+    rt.status = restored_status
+    rt.paused_status_before = None
+    rt.paused_since = None
+    await _persist_session_status(rt)
 
 
 async def reconnect_window_expired(rt: SessionRuntime) -> bool:
@@ -782,18 +798,16 @@ async def _persist_session_status(rt: SessionRuntime) -> None:
 
 async def broadcast(rt: SessionRuntime, message: dict[str, Any]) -> None:
     """Send a JSON message to every connected client in the session."""
-    dead: list[PlayerSlot] = []
+    dead: list[tuple[PlayerSlot, str | None]] = []
     for slot, ws in list(rt.connections.items()):
         try:
             await ws.send_json(message)
         except Exception:
             log.warning("Failed to send to %s in room %s; dropping connection", slot.value, rt.room_code)
-            dead.append(slot)
-    for slot in dead:
-        rt.connections.pop(slot, None)
-        cp = rt.players.get(slot)
-        if cp is not None:
-            cp.is_connected = False
+            cp = rt.players.get(slot)
+            dead.append((slot, cp.connection_id if cp is not None else None))
+    for slot, connection_id in dead:
+        await mark_disconnected(rt.room_code, slot, connection_id=connection_id)
 
 
 async def broadcast_to(rt: SessionRuntime, slot: PlayerSlot, message: dict[str, Any]) -> None:
@@ -804,10 +818,12 @@ async def broadcast_to(rt: SessionRuntime, slot: PlayerSlot, message: dict[str, 
         await ws.send_json(message)
     except Exception:
         log.warning("Failed to send to %s in room %s", slot.value, rt.room_code)
-        rt.connections.pop(slot, None)
         cp = rt.players.get(slot)
-        if cp is not None:
-            cp.is_connected = False
+        await mark_disconnected(
+            rt.room_code,
+            slot,
+            connection_id=cp.connection_id if cp is not None else None,
+        )
 
 
 async def broadcast_except(

@@ -218,3 +218,43 @@ async def test_restart_rebuild_stays_paused_until_both_players_reconnect(temp_st
         desired_slot=PlayerSlot.GUEST,
     )
     assert rt.status == SessionStatus.GUEST_TURN
+
+
+@pytest.mark.asyncio
+async def test_paused_session_with_connected_players_recovers_turn_state(temp_state_dir, new_state):
+    await state_manager.save_state(new_state("camp_pause_recover", player_name="Host Hero"))
+    rt = await session_manager.create_session("camp_pause_recover", _host_character())
+    await session_manager.join_session(
+        rt.room_code,
+        websocket=FakeWebSocket(),
+        display_name="Host",
+        character_name="Host Hero",
+        client_id="host-client",
+    )
+    await session_manager.join_session(
+        rt.room_code,
+        websocket=FakeWebSocket(),
+        display_name="Guest",
+        character_name="Guest Hero",
+        client_id="guest-client",
+    )
+    await session_manager.set_ready(rt.room_code, PlayerSlot.HOST, True)
+    rt = await session_manager.set_ready(rt.room_code, PlayerSlot.GUEST, True)
+
+    rt.status = SessionStatus.PAUSED
+    rt.paused_status_before = None
+    rt.starting_slot_this_round = PlayerSlot.GUEST
+    rt.players[PlayerSlot.GUEST].is_connected = False
+
+    rt, guest = await session_manager.join_session(
+        rt.room_code,
+        websocket=FakeWebSocket(),
+        display_name="Guest",
+        character_name="Guest Hero",
+        client_id="guest-client",
+    )
+
+    assert guest.slot == PlayerSlot.GUEST
+    assert rt.players[PlayerSlot.HOST].is_connected is True
+    assert rt.players[PlayerSlot.GUEST].is_connected is True
+    assert rt.status == SessionStatus.GUEST_TURN

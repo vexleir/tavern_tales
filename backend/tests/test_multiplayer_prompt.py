@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import prompt_builder
 from schema import (
+    CampaignPreferenceContext,
     MultiplayerConfig,
     PlayerCharacter,
     PlayerSlot,
@@ -56,7 +57,10 @@ def test_multiplayer_prompt_includes_party_block(new_state):
     assert "Sword: 12" in sp
     assert "Bow: 18" in sp
     assert "[MULTIPLAYER NARRATION RULES]" in sp
-    assert "override the single-player second-person POV guidance" in sp
+    assert "The user is the player character" not in sp
+    assert 'Second-person present tense ("You see...' not in sp
+    assert "The users are players submitting command text" in sp
+    assert "override any profile or history text" in sp
     assert "Current acting character: Aragorn (host)." in sp
     assert "Next spotlight after your response: Legolas (guest)." in sp
     assert "third-person present tense" in sp
@@ -85,6 +89,39 @@ def test_format_multiplayer_turn_message_attributes_single_actor():
         " I study the tracks. ",
         next_actor_name="Aragorn",
     )
+    assert "Treat this as command text" in msg
     assert "Acting character: Legolas" in msg
-    assert "Player input (I/me/my refers to Legolas): I study the tracks." in msg
+    assert "Submitted action text (I/me/my/we refers to Legolas): I study the tracks." in msg
+    assert "Do not answer as the acting character" in msg
     assert "hand the spotlight to: Aragorn" in msg
+
+
+def test_multiplayer_preference_pov_cannot_force_first_person(new_state):
+    state = new_state("camp_mp_pov")
+    _attach_multiplayer(state)
+    state.preference_context = CampaignPreferenceContext(
+        enabled=True,
+        source="saved_fantasy",
+        global_context={"preferredPOV": "first", "fadeToBlack": False},
+        selected_themes=[{"id": "tone", "label": "Tense intrigue"}],
+    )
+    state.multiplayer.merged_preference_context = CampaignPreferenceContext(
+        enabled=True,
+        source="multiplayer_merge",
+        global_context={"preferredPOV": "first", "consentStyle": "explicit"},
+        selected_themes=[{"id": "shared_tone", "label": "Shared tension"}],
+    )
+
+    built = prompt_builder.build_prompt(
+        state,
+        user_message=prompt_builder.format_multiplayer_turn_message(
+            "Aragorn",
+            "I open the door.",
+            next_actor_name="Legolas",
+        ),
+    )
+    sp = built.system_prompt
+    assert "preferredPOV: first" not in sp
+    assert "Multiplayer POV override" in sp
+    assert "Shared tension" in sp
+    assert "Tense intrigue" not in sp
