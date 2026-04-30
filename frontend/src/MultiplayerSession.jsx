@@ -1,7 +1,8 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import useMultiplayerSession from './hooks/useMultiplayerSession';
 import MultiplayerLobby from './MultiplayerLobby';
 import MultiplayerPlay from './MultiplayerPlay';
+import { apiFetch } from './lib/api';
 
 const PLAY_STATUSES = new Set(['host_turn', 'guest_turn', 'generating', 'paused']);
 
@@ -41,6 +42,34 @@ export default function MultiplayerSession({
   const status = state.sessionState?.status || 'lobby';
   const isLobby = status === 'lobby';
   const isPlay = PLAY_STATUSES.has(status);
+  const [playCountdown, setPlayCountdown] = useState(null);
+  const previousStatusRef = useRef(status);
+
+  useEffect(() => {
+    const previousStatus = previousStatusRef.current;
+    previousStatusRef.current = status;
+    if (previousStatus === 'lobby' && PLAY_STATUSES.has(status)) {
+      const id = window.setTimeout(() => setPlayCountdown(3), 0);
+      return () => window.clearTimeout(id);
+    }
+    if (status === 'lobby') {
+      const id = window.setTimeout(() => setPlayCountdown(null), 0);
+      return () => window.clearTimeout(id);
+    }
+    return undefined;
+  }, [status]);
+
+  useEffect(() => {
+    if (playCountdown === null || playCountdown <= 0) return undefined;
+    const id = window.setTimeout(() => {
+      setPlayCountdown((current) => (current === null ? null : current - 1));
+    }, 1000);
+    return () => window.clearTimeout(id);
+  }, [playCountdown]);
+
+  if (state.expiredMessage) {
+    return <CenteredMessage title="Session expired" detail={state.expiredMessage} actionLabel="Back" onAction={onLeave} />;
+  }
 
   if (state.status === 'connecting' && !state.sessionState) {
     return <CenteredMessage title="Connecting…" detail="Opening the multiplayer channel." />;
@@ -60,6 +89,7 @@ export default function MultiplayerSession({
         mergedPreferenceSummary={state.mergedPreferenceSummary}
         onReady={actions.readyUp}
         onUnready={actions.unready}
+        onSetStartingSlot={actions.setStartingSlot}
         onUpdateCharacter={actions.updateCharacter}
         onArchive={actions.archiveSession}
         onDelete={actions.deleteSession}
@@ -67,6 +97,10 @@ export default function MultiplayerSession({
         onLeave={onLeave}
       />
     );
+  }
+
+  if (isPlay && playCountdown !== null && playCountdown > 0) {
+    return <CenteredMessage title={`Session starting in ${playCountdown}`} detail="Ready your dice." />;
   }
 
   if (isPlay) {
@@ -81,11 +115,16 @@ export default function MultiplayerSession({
         currentGeneration={state.currentGeneration}
         lastCompletedGeneration={state.lastCompletedGeneration}
         generating={state.generating}
+        reconnectAttempt={state.reconnectAttempt}
         oocMessages={state.oocMessages}
         partnerComposing={state.partnerComposing}
         onSubmitAction={actions.submitAction}
+        onGiftTurn={actions.giftTurn}
+        onRequestReroll={actions.requestReroll}
+        onRequestContinue={actions.requestContinue}
         onSendOOC={actions.sendOOC}
         onComposing={actions.composing}
+        onUpdateCharacter={actions.updateCharacter}
         onArchive={actions.archiveSession}
         onDelete={actions.deleteSession}
         onEjectGuest={actions.ejectGuest}
@@ -157,6 +196,7 @@ export function MultiplayerEntry({
   const [importText, setImportText] = useState('');
   const [importError, setImportError] = useState('');
   const [launched, setLaunched] = useState(Boolean(autoLaunch && initialRoomCode && initialJoinPayload));
+  const [roomCheck, setRoomCheck] = useState({ status: 'idle', exists: false, serverStatus: null });
 
   const joinUrl = useMemo(() => {
     if (!roomCode) return '';
@@ -166,6 +206,42 @@ export function MultiplayerEntry({
     const frontendOrigin = window.location.origin;
     return `${frontendOrigin}/?room_code=${roomCode}`;
   }, [roomCode, initialJoinUrl]);
+
+  useEffect(() => {
+    if (launched) return undefined;
+    const code = roomCode.trim().toUpperCase();
+    if (code.length < 4) {
+      const idleId = window.setTimeout(() => {
+        setRoomCheck({ status: 'idle', exists: false, serverStatus: null });
+      }, 0);
+      return () => window.clearTimeout(idleId);
+    }
+    let cancelled = false;
+    const checkingId = window.setTimeout(() => {
+      setRoomCheck({ status: 'checking', exists: false, serverStatus: null });
+    }, 0);
+    const id = window.setTimeout(async () => {
+      try {
+        const res = await apiFetch(`/api/session/${encodeURIComponent(code)}/exists`);
+        const data = await res.json();
+        if (cancelled) return;
+        setRoomCheck({
+          status: data.exists ? 'exists' : 'missing',
+          exists: Boolean(data.exists),
+          serverStatus: data.status || null,
+        });
+      } catch {
+        if (!cancelled) {
+          setRoomCheck({ status: 'error', exists: false, serverStatus: null });
+        }
+      }
+    }, 600);
+    return () => {
+      cancelled = true;
+      window.clearTimeout(checkingId);
+      window.clearTimeout(id);
+    };
+  }, [roomCode, launched]);
 
   const handleImport = () => {
     setImportError('');
@@ -225,7 +301,15 @@ export function MultiplayerEntry({
     setPreferenceSource('lobby_form');
   };
 
-  const ready = roomCode.length >= 4 && displayName.trim() && characterName.trim();
+  const hasUnsavedPreferences = Boolean(preferenceProfile && preferenceTab !== 'skip');
+  const ready = roomCode.length >= 4 && roomCheck.exists && displayName.trim() && characterName.trim();
+
+  const handleBack = () => {
+    if (hasUnsavedPreferences && !window.confirm('Leave? Your preference setup will be lost.')) {
+      return;
+    }
+    onBack?.();
+  };
 
   if (launched && roomCode) {
     return (
@@ -251,7 +335,7 @@ export function MultiplayerEntry({
       <div className="max-w-3xl mx-auto bg-fantasy-panel/40 border border-slate-700/50 rounded-xl p-6">
         <div className="flex justify-between items-center mb-6">
           <h1 className="text-3xl text-fantasy-accent">Join a Multiplayer Session</h1>
-          <button onClick={onBack} className="text-sm text-slate-400 hover:text-amber-300 underline font-sans">Back</button>
+          <button onClick={handleBack} className="text-sm text-slate-400 hover:text-amber-300 underline font-sans">Back</button>
         </div>
 
         <div className="space-y-4 font-sans text-sm">
@@ -263,6 +347,7 @@ export function MultiplayerEntry({
               maxLength={8}
               className="w-full bg-slate-900 border border-slate-700 rounded px-3 py-2 text-amber-100 font-mono tracking-widest text-lg"
             />
+            <RoomCodeStatus roomCheck={roomCheck} />
           </Field>
 
           <Field label="Your Display Name">
@@ -347,6 +432,22 @@ function Field({ label, children }) {
   );
 }
 
+function RoomCodeStatus({ roomCheck }) {
+  if (roomCheck.status === 'idle') {
+    return <div className="mt-1 text-xs text-slate-500">Enter a room code.</div>;
+  }
+  if (roomCheck.status === 'checking') {
+    return <div className="mt-1 text-xs text-slate-400">Checking room...</div>;
+  }
+  if (roomCheck.status === 'exists') {
+    return <div className="mt-1 text-xs text-emerald-400">&#10003; Room found.</div>;
+  }
+  if (roomCheck.status === 'missing') {
+    return <div className="mt-1 text-xs text-red-400">&#10007; Room not found.</div>;
+  }
+  return <div className="mt-1 text-xs text-red-400">Could not check room.</div>;
+}
+
 const QUICK_THEMES = [
   { id: 'quick_action', label: 'Action & combat', description: 'Fights, chases, dramatic peril.' },
   { id: 'quick_intrigue', label: 'Intrigue & mystery', description: 'Secrets, clues, schemes.' },
@@ -368,8 +469,77 @@ function QuickPreferenceForm({ onChange, isApplied }) {
   const [intensity, setIntensity] = useState('moderate');
   const [fadeToBlack, setFadeToBlack] = useState(true);
   const [themes, setThemes] = useState(() => Object.fromEntries(QUICK_THEMES.map((t) => [t.id, 'none'])));
+  const [showSave, setShowSave] = useState(false);
+  const [saveName, setSaveName] = useState('');
+  const [saveStatus, setSaveStatus] = useState('idle'); // idle | saving | saved | error
+  const [saveError, setSaveError] = useState('');
 
   const apply = () => onChange({ intensity, fadeToBlack, themes });
+
+  const buildProfileObj = (name) => ({
+    profileId: `quick_${Date.now()}`,
+    userId: 'local_default',
+    displayName: name,
+    profileVersion: 1,
+    schemaVersion: '1.0.0',
+    status: 'active',
+    globalPreferences: {
+      consentStyle: 'explicit',
+      fadeToBlack,
+      preferredPOV: 'third',
+      rolePreference: 'switch',
+    },
+    categories: [{
+      id: 'lobby_quick_themes',
+      label: 'Quick Setup',
+      items: QUICK_THEMES.map((theme) => ({
+        id: theme.id,
+        label: theme.label,
+        description: theme.description,
+        fantasyInterest: themes[theme.id] || 'none',
+        realWorldWillingness: 'discuss_only',
+        textRoleplayWillingness: themes[theme.id] && themes[theme.id] !== 'none' ? 'yes' : 'no',
+        intensityPreference: intensity,
+        giverReceiverRole: 'both',
+        context: ['multiplayer'],
+        fantasyOnly: true,
+        partnerSharePermission: 'overlap_only',
+      })),
+    }],
+  });
+
+  const handleSave = async () => {
+    const name = saveName.trim();
+    if (!name) return;
+    setSaveStatus('saving');
+    setSaveError('');
+    try {
+      const profile = buildProfileObj(name);
+      const res = await apiFetch('/api/preference-profiles/import', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ profile, userId: 'local_default', displayNameSuffix: '' }),
+      });
+      if (!res.ok) {
+        const text = await res.text().catch(() => '');
+        throw new Error(text || `Server error ${res.status}`);
+      }
+      setSaveStatus('saved');
+      setShowSave(false);
+      setSaveName('');
+      window.setTimeout(() => setSaveStatus('idle'), 3000);
+    } catch (e) {
+      setSaveStatus('error');
+      setSaveError(e.message || 'Could not save profile.');
+    }
+  };
+
+  const cancelSave = () => {
+    setShowSave(false);
+    setSaveName('');
+    setSaveError('');
+    if (saveStatus !== 'saved') setSaveStatus('idle');
+  };
 
   return (
     <div className="space-y-3">
@@ -405,9 +575,45 @@ function QuickPreferenceForm({ onChange, isApplied }) {
           </div>
         ))}
       </div>
-      <button onClick={apply} className="bg-indigo-700 hover:bg-indigo-600 text-white text-xs px-3 py-1 rounded">
-        {isApplied ? 'Update Quick Preferences' : 'Apply Quick Preferences'}
-      </button>
+      <div className="flex items-center gap-2 flex-wrap">
+        <button onClick={apply} className="bg-indigo-700 hover:bg-indigo-600 text-white text-xs px-3 py-1 rounded">
+          {isApplied ? 'Update Quick Preferences' : 'Apply Quick Preferences'}
+        </button>
+        {isApplied && !showSave && (
+          <button
+            onClick={() => setShowSave(true)}
+            className="bg-slate-700 hover:bg-slate-600 text-amber-200 text-xs px-3 py-1 rounded border border-slate-600"
+          >Save as Profile…</button>
+        )}
+        {saveStatus === 'saved' && <span className="text-xs text-emerald-400">&#10003; Saved!</span>}
+      </div>
+      {showSave && (
+        <div className="flex items-start gap-2 flex-wrap bg-slate-900/60 border border-slate-700 rounded p-2">
+          <input
+            value={saveName}
+            onChange={(e) => setSaveName(e.target.value)}
+            onKeyDown={(e) => { if (e.key === 'Enter') handleSave(); if (e.key === 'Escape') cancelSave(); }}
+            placeholder="Profile name…"
+            maxLength={120}
+            autoFocus
+            className="flex-1 bg-slate-800 border border-slate-700 rounded px-2 py-1 text-amber-100 text-xs min-w-0"
+          />
+          <button
+            onClick={handleSave}
+            disabled={!saveName.trim() || saveStatus === 'saving'}
+            className="bg-emerald-700 hover:bg-emerald-600 text-white text-xs px-3 py-1 rounded disabled:opacity-50"
+          >
+            {saveStatus === 'saving' ? 'Saving…' : 'Save'}
+          </button>
+          <button
+            onClick={cancelSave}
+            className="text-slate-400 hover:text-white text-xs px-2 py-1"
+          >Cancel</button>
+          {saveStatus === 'error' && (
+            <span className="text-xs text-red-400 w-full mt-0.5">{saveError}</span>
+          )}
+        </div>
+      )}
     </div>
   );
 }

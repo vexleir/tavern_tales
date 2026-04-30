@@ -36,7 +36,13 @@
       "Bash(python -c \"import fastapi, starlette; print\\('fastapi', fastapi.__version__\\); print\\('starlette', starlette.__version__\\)\")",
       "Bash(python -m pytest tests/test_preferences.py --tb=short)",
       "Bash(python -m pytest tests/test_preferences.py -v --tb=short)",
-      "Bash(python -m pytest --tb=short)"
+      "Bash(python -m pytest --tb=short)",
+      "Bash(powershell.exe -NonInteractive -File check.ps1)",
+      "Bash(python -m pytest tests/test_preferences.py::test_preference_api_create_export_and_random_fantasy -x)",
+      "Bash(python -m pytest tests/test_preferences.py::test_preference_api_create_export_and_random_fantasy -x -s)",
+      "Bash(powershell.exe -NonInteractive -Command \"& { Set-Location 'f:\\\\Sandbox\\\\tavern_tales'; .\\\\check.ps1 }\")",
+      "Bash(grep -n \"aria-label\\\\|>?\\\\<\\\\/button\\\\|>✎\\\\|>✗\\\\|>×\\\\|>✓\\\\|>⚙\\\\|onClick.*\\\\/>$\\\\|onClick.*>.$\" f:/Sandbox/tavern_tales/frontend/src/App.jsx)",
+      "Bash(python -m pytest tests/test_preferences.py::test_preference_api_create_export_and_random_fantasy tests/test_chat_flow.py tests/test_session_manager.py -q)"
     ]
   }
 }

@@ -57,6 +57,7 @@ from schema import (
     PlayerSlot,
     ReversalPatch,
     Role,
+    RulesConfig,
     SamplingOverrides,
     SessionStatus,
     StatBound,
@@ -68,6 +69,9 @@ log = logging.getLogger(__name__)
 
 app = FastAPI(title="Tavern Tales Reborn GM Engine")
 WEBSOCKET_DISCONNECT_GRACE_SECONDS = 2.0
+SESSION_EXPIRED_MESSAGE = (
+    "Session expired - the reconnect window closed. Please contact the host for a new room code."
+)
 
 app.add_middleware(
     CORSMiddleware,
@@ -131,7 +135,20 @@ async def _startup() -> None:
     await preference_store.initialize()
     await session_manager.initialize()
     memory.purge_deleted_memory_artifacts()
+    asyncio.create_task(_session_cleanup_loop())
     log.info("Tavern Tales backend started (schema v%d).", SCHEMA_VERSION)
+
+
+async def _session_cleanup_loop() -> None:
+    """Archive stale paused sessions every 30 minutes."""
+    while True:
+        await asyncio.sleep(1800)
+        try:
+            removed = await session_manager.cleanup_expired_sessions()
+            if removed:
+                log.info("Session cleanup: archived %d expired session(s).", removed)
+        except Exception:
+            log.exception("Session cleanup loop error.")
 
 
 # Cache of the most recently assembled prompt per campaign (for memory inspector, C4)
@@ -167,6 +184,8 @@ class InitCampaignRequest(BaseModel):
     gm_model: str = "llama3"
     utility_model: str | None = None
     nsfw_world_gen: bool = False
+    summary_short_interval: int = 5
+    summary_chapter_interval: int = 20
 
 
 class GenerateWorldRequest(BaseModel):
@@ -259,6 +278,8 @@ class UpdateSessionCharacterRequest(BaseModel):
     appearance: str | None = Field(default=None, max_length=600)
     description: str | None = Field(default=None, max_length=1200)
     location: str | None = Field(default=None, max_length=200)
+    stats: dict[str, int] | None = Field(default=None, max_length=50)
+    inventory: list[str] | None = Field(default=None, max_length=100)
 
 
 # ---------------------------------------------------------------------------
@@ -269,6 +290,19 @@ class UpdateSessionCharacterRequest(BaseModel):
 @app.get("/")
 def read_root():
     return {"status": "Tavern Tales backend is running.", "schema_version": SCHEMA_VERSION}
+
+
+@app.get("/api/health")
+async def get_health():
+    async with httpx.AsyncClient() as client:
+        try:
+            res = await client.get("http://localhost:11434/api/tags", timeout=2.0)
+            res.raise_for_status()
+            data = res.json()
+            return {"ollama": "ok", "models_available": len(data.get("models", []))}
+        except Exception as e:
+            log.warning("Ollama health check failed: %s", e)
+            return {"ollama": "unreachable", "models_available": 0}
 
 
 def _detect_lan_ip() -> str:
@@ -326,7 +360,25 @@ def _sensitive_storage_http_error(e: Exception) -> HTTPException:
 @app.get("/api/preference-profiles")
 async def list_preference_profiles(include_archived: bool = False):
     try:
-        return [p.model_dump(mode="json") for p in await preference_store.list_profiles(include_archived)]
+        profiles = await preference_store.list_profiles(include_archived)
+        # Build reverse-lookup: profile_id → list of campaign IDs that reference it.
+        linked: dict[str, list[str]] = {}
+        try:
+            summaries = await state_manager.list_campaigns()
+            for summary in summaries:
+                state = await state_manager.load_state(summary.id)
+                if state and state.preference_context and state.preference_context.enabled:
+                    pid = state.preference_context.profile_id or ""
+                    if pid:
+                        linked.setdefault(pid, []).append(summary.id)
+        except Exception:
+            log.warning("Could not build preference profile cross-reference.")
+        result = []
+        for p in profiles:
+            d = p.model_dump(mode="json")
+            d["linked_campaigns"] = linked.get(p.profileId, [])
+            result.append(d)
+        return result
     except Exception as e:  # noqa: BLE001
         raise _sensitive_storage_http_error(e)
 
@@ -620,6 +672,10 @@ async def init_campaign(req: InitCampaignRequest):
             utility=req.utility_model or "llama3.1:8b-instruct",
             nsfw_world_gen=req.nsfw_world_gen,
         ),
+        rules=RulesConfig(
+            summary_short_interval=max(1, req.summary_short_interval),
+            summary_chapter_interval=max(1, req.summary_chapter_interval),
+        ),
         player=Player(
             name=req.player_name,
             location=req.starting_location,
@@ -768,6 +824,28 @@ async def patch_state(
     if new_state is None:
         raise HTTPException(404, "campaign not found")
     return {"status": "success", "state": new_state.model_dump(mode="json")}
+
+
+@app.post("/api/campaigns/{campaign_id}/convert_to_solo")
+async def convert_to_solo(campaign_id: str):
+    """Strip archived multiplayer config so the campaign resumes as single-player."""
+    campaign_id_ctx.set(campaign_id)
+    state = await state_manager.load_state(campaign_id)
+    if state is None:
+        raise HTTPException(404, "campaign not found")
+    if state.multiplayer is None:
+        raise HTTPException(400, "campaign has no multiplayer config")
+    if state.multiplayer.session_status.value != "archived":
+        raise HTTPException(400, "session must be archived before converting to solo")
+
+    def _strip(st):
+        st.multiplayer = None
+        return st
+
+    new_state = await state_manager.mutate_state(campaign_id, _strip)
+    if new_state is None:
+        raise HTTPException(404, "campaign not found")
+    return {"status": "success"}
 
 
 @app.post("/api/campaigns/{campaign_id}/fork")
@@ -936,6 +1014,15 @@ async def get_multiplayer_session_state(room_code: str):
     return await _session_payload(rt)
 
 
+@app.get("/api/session/{room_code}/exists")
+async def multiplayer_session_exists(room_code: str):
+    rt = await session_manager.get_session(room_code)
+    return {
+        "exists": rt is not None,
+        "status": rt.status.value if rt is not None else None,
+    }
+
+
 @app.post("/api/session/{room_code}/character")
 async def update_multiplayer_character(room_code: str, req: UpdateSessionCharacterRequest):
     try:
@@ -947,6 +1034,8 @@ async def update_multiplayer_character(room_code: str, req: UpdateSessionCharact
             appearance=req.appearance,
             description=req.description,
             location=req.location,
+            stats=req.stats,
+            inventory=req.inventory,
         )
         await _broadcast_session_state(rt)
         return await _session_payload(rt)
@@ -1008,6 +1097,32 @@ async def delete_multiplayer_session(
     return {"status": "success" if deleted else "not_found"}
 
 
+def _display_multiplayer_action(content: str) -> str:
+    lines = content.splitlines()
+    for idx, line in enumerate(lines):
+        if not line.startswith("Submitted action text"):
+            continue
+        _, _, first = line.partition(":")
+        action_lines = [first.strip()]
+        for follow in lines[idx + 1:]:
+            if follow.startswith("Required response style:") or follow.startswith("After the GM response,"):
+                break
+            action_lines.append(follow)
+        action = "\n".join(action_lines).strip()
+        return action or content
+    return content
+
+
+def _multiplayer_actor_name(state: CampaignState, slot: PlayerSlot | None) -> str:
+    if state.multiplayer is None:
+        return ""
+    if slot == PlayerSlot.HOST:
+        return state.multiplayer.host_character.name or "Host"
+    if slot == PlayerSlot.GUEST and state.multiplayer.guest_character is not None:
+        return state.multiplayer.guest_character.name or "Guest"
+    return ""
+
+
 @app.post("/api/session/{room_code}/export")
 async def export_multiplayer_narrative(room_code: str):
     rt = await session_manager.get_session(room_code)
@@ -1017,14 +1132,11 @@ async def export_multiplayer_narrative(room_code: str):
     if state is None:
         raise HTTPException(404, "campaign not found")
 
-    def _actor_name(slot: str | None) -> str:
-        if state.multiplayer is None:
-            return ""
-        if slot == PlayerSlot.HOST.value:
-            return state.multiplayer.host_character.name or "Host"
-        if slot == PlayerSlot.GUEST.value and state.multiplayer.guest_character is not None:
-            return state.multiplayer.guest_character.name or "Guest"
-        return ""
+    actions_by_turn = {
+        msg.turn_id: _display_multiplayer_action(msg.content)
+        for msg in state.messages
+        if msg.turn_id and msg.role == Role.USER
+    }
 
     turns = []
     for msg in state.messages:
@@ -1035,12 +1147,14 @@ async def export_multiplayer_narrative(room_code: str):
             "turn_id": msg.turn_id,
             "timestamp": msg.timestamp,
             "content": msg.content,
+            "gm_content": msg.content,
+            "player_action": actions_by_turn.get(msg.turn_id, ""),
             "is_kickoff": msg.is_kickoff,
             "partial": msg.partial,
             "player_slot": msg.player_slot,
-            "actor_name": _actor_name(msg.player_slot),
+            "actor_name": "Opening Scene" if msg.is_kickoff else _multiplayer_actor_name(state, _coerce_slot(msg.player_slot)),
         })
-    narrative = "\n\n".join(t["content"] for t in turns)
+    narrative = "\n\n".join(t["gm_content"] for t in turns)
     return {
         "room_code": room_code.upper(),
         "campaign_id": rt.campaign_id,
@@ -1074,6 +1188,16 @@ async def multiplayer_session_ws(websocket: WebSocket, room_code: str):
         if preference_profile is not None:
             _profile_from_json(preference_profile)
 
+        existing_rt = await session_manager.get_session(room_code)
+        if (
+            msg_type == "reconnect"
+            and existing_rt is not None
+            and await session_manager.reconnect_window_expired(existing_rt)
+        ):
+            await _send_ws_error(websocket, SESSION_EXPIRED_MESSAGE, "session_expired")
+            await websocket.close(code=1008)
+            return
+
         try:
             rt, player = await session_manager.join_session(
                 room_code,
@@ -1092,12 +1216,14 @@ async def multiplayer_session_ws(websocket: WebSocket, room_code: str):
 
         player_slot = player.slot
         player_connection_id = player.connection_id
+        ooc_log = await session_manager.read_ooc_log(rt.room_code)
         await websocket.send_json({
             "type": "slot_assigned",
             "slot": player_slot.value,
             "display_name": player.display_name,
             "character_name": player.character_name,
             "connection_id": player_connection_id,
+            "ooc_log": ooc_log,
         })
         await _refresh_merged_preferences(rt)
         if msg_type == "reconnect":
@@ -1141,13 +1267,31 @@ async def multiplayer_session_ws(websocket: WebSocket, room_code: str):
                         {"type": "floor_passed", "active_slot": active.value if active else None},
                     )
                 await _broadcast_session_state(rt)
+                if rt.kickoff_needed:
+                    asyncio.create_task(_run_multiplayer_kickoff(rt.room_code))
+
+            elif msg_type == "set_starting_slot":
+                if player_slot != PlayerSlot.HOST:
+                    await _send_ws_error(websocket, "host slot required", "host_only")
+                    continue
+                if rt.status != SessionStatus.LOBBY:
+                    await _send_ws_error(websocket, "starting slot can only be changed in the lobby", "invalid_state")
+                    continue
+                try:
+                    target_slot = PlayerSlot(str(incoming.get("slot") or "").lower())
+                except ValueError:
+                    await _send_ws_error(websocket, "slot must be host or guest", "invalid_slot")
+                    continue
+                rt = await session_manager.set_starting_slot(rt.room_code, target_slot)
+                await _broadcast_session_state(rt)
 
             elif msg_type == "submit_action":
+                action_text = str(incoming.get("text") or "")
                 try:
                     rt, _result = await session_manager.submit_action(
                         rt.room_code,
                         player_slot,
-                        str(incoming.get("text") or ""),
+                        action_text,
                     )
                 except ValueError as e:
                     await _send_ws_error(websocket, str(e), "not_your_turn" if "not your turn" in str(e) else "submit_failed")
@@ -1161,11 +1305,45 @@ async def multiplayer_session_ws(websocket: WebSocket, room_code: str):
                         "turn_number": rt.turn_number,
                         "acting_slot": player_slot.value,
                         "actor_name": player.character_name if player else player_slot.value.title(),
+                        "player_action": action_text.strip(),
                     },
                 )
                 # Spawn the AI turn so the WS remains responsive to OOC and
                 # disconnect events while the model is generating.
                 asyncio.create_task(_run_multiplayer_turn(rt.room_code))
+                await _broadcast_session_state(rt)
+
+            elif msg_type == "gift_turn":
+                if player_slot != PlayerSlot.HOST:
+                    await _send_ws_error(websocket, "host slot required", "host_only")
+                    continue
+                if rt.status != SessionStatus.HOST_TURN:
+                    await _send_ws_error(websocket, "gift turn is only available during the host turn", "invalid_state")
+                    continue
+                if rt.kickoff_needed or rt.kickoff_in_progress:
+                    await _send_ws_error(websocket, "opening scene in progress", "submit_failed")
+                    continue
+                rt = await session_manager.begin_next_round(rt.room_code)
+                active = session_manager.current_active_slot(rt)
+                await session_manager.broadcast(
+                    rt,
+                    {"type": "floor_passed", "active_slot": active.value if active else None},
+                )
+                await _broadcast_session_state(rt)
+
+            elif msg_type in {"request_reroll", "request_continue"}:
+                target_message_id = str(
+                    incoming.get("message_id") or incoming.get("target_message_id") or ""
+                ).strip() or None
+                try:
+                    rt, restore_status = await session_manager.begin_aux_generation(rt.room_code)
+                except ValueError as e:
+                    await _send_ws_error(websocket, str(e), "generation_unavailable")
+                    continue
+                if msg_type == "request_reroll":
+                    asyncio.create_task(_run_multiplayer_reroll(rt.room_code, restore_status, target_message_id))
+                else:
+                    asyncio.create_task(_run_multiplayer_continue(rt.room_code, restore_status, target_message_id))
                 await _broadcast_session_state(rt)
 
             elif msg_type == "composing":
@@ -1183,15 +1361,22 @@ async def multiplayer_session_ws(websocket: WebSocket, room_code: str):
                     continue
                 text = text[:session_manager.MAX_OOC_MESSAGE_LEN]
                 player = rt.players.get(player_slot)
+                display_name = player.display_name if player else player_slot.value
+                ts = datetime.now(timezone.utc).isoformat()
                 await session_manager.broadcast(
                     rt,
                     {
                         "type": "ooc_message",
                         "slot": player_slot.value,
-                        "display_name": player.display_name if player else player_slot.value,
+                        "display_name": display_name,
                         "text": text,
+                        "ts": ts,
                     },
                 )
+                try:
+                    await session_manager.append_ooc(rt.room_code, player_slot, display_name, text, ts)
+                except Exception:
+                    log.exception("Failed to persist OOC message for room %s", rt.room_code)
 
             elif msg_type == "update_character":
                 rt = await session_manager.update_character(
@@ -1202,6 +1387,8 @@ async def multiplayer_session_ws(websocket: WebSocket, room_code: str):
                     appearance=incoming.get("appearance"),
                     description=incoming.get("description"),
                     location=incoming.get("location"),
+                    stats=incoming.get("stats"),
+                    inventory=incoming.get("inventory"),
                 )
                 await _broadcast_session_state(rt)
 
@@ -1259,6 +1446,15 @@ async def multiplayer_session_ws(websocket: WebSocket, room_code: str):
                 if paused.paused_since is not None:
                     deadline = paused.paused_since.timestamp() + paused.reconnect_window_seconds
                 if paused.status == SessionStatus.PAUSED:
+                    if await session_manager.reconnect_window_expired(paused):
+                        await session_manager.broadcast(
+                            paused,
+                            {
+                                "type": "error",
+                                "message": SESSION_EXPIRED_MESSAGE,
+                                "code": "session_expired",
+                            },
+                        )
                     await session_manager.broadcast(
                         paused,
                         {
@@ -1302,15 +1498,18 @@ async def _background_after_turn(
         side.error = ""
 
         try:
-            mem_id = memory.add_memory(
-                campaign_id,
-                gm_msg_id,
-                mem_content,
-                turn=len(state.messages),
-                kind="event",
-                location=state.player.location,
-            )
-            side.memory_ids.append(mem_id)
+            try:
+                mem_id = memory.add_memory(
+                    campaign_id,
+                    gm_msg_id,
+                    mem_content,
+                    turn=len(state.messages),
+                    kind="event",
+                    location=state.player.location,
+                )
+                side.memory_ids.append(mem_id)
+            except Exception as _mem_write_err:
+                log.warning("Memory write failed for %s msg %s: %s", campaign_id, gm_msg_id, _mem_write_err)
 
             delta = await extraction.extract_state_changes(state, user_action, gm_text)
             reversal_dict = state_manager.apply_state_delta(state, delta)
@@ -1344,7 +1543,13 @@ async def _run_chat_stream(
 
         # Build prompt + window from the freshest state after acquiring the turn lock.
         query_for_memory = user_message or "Begin the scene."
-        memories = memory.retrieve_relevant_memories(campaign_id, query_for_memory, n_results=4)
+        memory_warning = False
+        try:
+            memories = memory.retrieve_relevant_memories(campaign_id, query_for_memory, n_results=4)
+        except Exception as _mem_err:
+            log.warning("Memory retrieval failed for %s: %s", campaign_id, _mem_err)
+            memories = []
+            memory_warning = True
         action_resolution = game_rules.resolve_action(state, user_message or "")
         turn_context = game_rules.render_resolution(action_resolution)
         built = prompt_builder.build_prompt(
@@ -1364,6 +1569,7 @@ async def _run_chat_stream(
             "type": "start",
             "stats": built.stats.model_dump(),
             "action_resolution": action_resolution.model_dump() if action_resolution else None,
+            "memory_warning": memory_warning or None,
         })
 
         buf: list[str] = []
@@ -1392,6 +1598,12 @@ async def _run_chat_stream(
             # the generator without re-raising so starlette cleans up cleanly.
             stop_reason = "cancelled"
             cancelled = True
+        except Exception as _stream_err:
+            # Ollama connection dropped mid-stream (6.4). Preserve partial content.
+            log.warning("Ollama stream dropped for %s: %s", campaign_id, _stream_err)
+            error = "Connection to AI dropped."
+            stop_reason = "cancelled"  # treat as partial so continue/reroll are offered
+            yield _sse_pack({"type": "error", "data": error, "partial": True})
 
         gm_text = "".join(buf).strip()
 
@@ -1454,6 +1666,7 @@ async def _run_chat_stream(
 
 
 async def _background_after_multiplayer_turn(
+    room_code: str,
     campaign_id: str,
     acting_slot: PlayerSlot,
     action_text: str,
@@ -1523,6 +1736,506 @@ async def _background_after_multiplayer_turn(
         return state
 
     await state_manager.mutate_state(campaign_id, _apply)
+    rt = await session_manager.get_session(room_code)
+    if rt is not None:
+        await _broadcast_session_state(rt)
+
+
+def _rollback_message_group(st: CampaignState, campaign_id: str, msg_id: str) -> None:
+    idx = next((i for i, m in enumerate(st.messages) if m.id == msg_id), -1)
+    if idx < 0:
+        return
+
+    target = st.messages[idx]
+    if target.turn_id:
+        remove_ids = {m.id for m in st.messages if m.turn_id == target.turn_id}
+    elif idx > 0 and st.messages[idx - 1].role == Role.USER:
+        remove_ids = {st.messages[idx - 1].id, target.id}
+    else:
+        remove_ids = {target.id}
+
+    for removed_id in list(remove_ids):
+        side = st.side_effects.get(removed_id)
+        if side:
+            state_manager.apply_reversal(st, side.reversal.model_dump())
+            if side.memory_ids:
+                memory.delete_memories_for_message(campaign_id, side.memory_ids)
+            st.side_effects.pop(removed_id, None)
+
+    st.messages = [m for m in st.messages if m.id not in remove_ids]
+
+
+def _latest_assistant_index(state: CampaignState, target_message_id: str | None = None) -> int:
+    if target_message_id:
+        return next((i for i, m in enumerate(state.messages) if m.id == target_message_id), -1)
+    return next((i for i in range(len(state.messages) - 1, -1, -1) if state.messages[i].role == Role.ASSISTANT), -1)
+
+
+async def _run_multiplayer_reroll(
+    room_code: str,
+    restore_status: SessionStatus,
+    target_message_id: str | None,
+) -> None:
+    """Regenerate a multiplayer assistant message without consuming the current floor."""
+    rt = await session_manager.get_session(room_code)
+    if rt is None:
+        return
+
+    campaign_id = rt.campaign_id
+    campaign_id_ctx.set(campaign_id)
+    turn_id = f"turn_{uuid.uuid4().hex[:12]}"
+    gm_msg_id: str | None = None
+    stop_reason = "stop"
+    partial = False
+    gm_text = ""
+    acting_slot: PlayerSlot | None = None
+    actor_name = ""
+    player_action = ""
+    resolved_target_id: str | None = None
+    target_is_kickoff = False
+
+    try:
+        async with state_manager.turn_lock(campaign_id):
+            state = await state_manager.load_state(campaign_id)
+            if state is None or state.multiplayer is None:
+                await session_manager.broadcast(rt, {"type": "error", "message": "campaign missing or not multiplayer", "code": "campaign_missing"})
+                return
+
+            target_index = _latest_assistant_index(state, target_message_id)
+            if target_index < 0 or state.messages[target_index].role != Role.ASSISTANT:
+                await session_manager.broadcast(rt, {"type": "error", "message": "target must be an assistant message", "code": "invalid_message"})
+                return
+            target = state.messages[target_index]
+            resolved_target_id = target.id
+            target_is_kickoff = target.is_kickoff
+            acting_slot = _coerce_slot(target.player_slot)
+            actor_name = "Opening Scene" if target.is_kickoff else _multiplayer_actor_name(state, acting_slot)
+
+            prev_user = None
+            if target.turn_id:
+                prev_user = next((m for m in state.messages if m.turn_id == target.turn_id and m.role == Role.USER), None)
+            if prev_user is None:
+                prev_user = next((m for m in reversed(state.messages[:target_index]) if m.role == Role.USER), None)
+            if prev_user is None:
+                await session_manager.broadcast(rt, {"type": "error", "message": "no user message to regenerate from", "code": "invalid_message"})
+                return
+            player_action = "" if target.is_kickoff else _display_multiplayer_action(prev_user.content)
+
+            async def _prune(st: CampaignState) -> CampaignState:
+                _rollback_message_group(st, campaign_id, target.id)
+                return st
+
+            pruned = await state_manager.mutate_state(campaign_id, _prune)
+            if pruned is None:
+                await session_manager.broadcast(rt, {"type": "error", "message": "campaign disappeared", "code": "campaign_missing"})
+                return
+
+            memories = memory.retrieve_relevant_memories(campaign_id, prev_user.content, n_results=4)
+            built = prompt_builder.build_prompt(
+                state=pruned,
+                user_message=prev_user.content,
+                retrieved_memories=memories,
+            )
+            _LAST_PROMPT[campaign_id] = {
+                "system_prompt": built.system_prompt,
+                "stats": built.stats.model_dump(),
+                "memories": memories,
+                "timestamp": datetime.now(timezone.utc).isoformat(),
+            }
+
+            await session_manager.broadcast(
+                rt,
+                {
+                    "type": "generation_start",
+                    "turn_number": rt.turn_number,
+                    "acting_slot": acting_slot.value if acting_slot else None,
+                    "actor_name": actor_name,
+                    "player_action": player_action,
+                    "is_kickoff": target.is_kickoff,
+                    "mode": "reroll",
+                    "target_message_id": target.id,
+                    "prompt_stats": built.stats.model_dump(),
+                },
+            )
+
+            buf: list[str] = []
+            error: str | None = None
+            try:
+                async for event in stream_chat(
+                    built.messages,
+                    model=pruned.models.gm,
+                    overrides=pruned.sampling_overrides,
+                ):
+                    et = event.get("type")
+                    if et == "token":
+                        chunk = event["data"]
+                        buf.append(chunk)
+                        await session_manager.broadcast(rt, {"type": "token", "text": chunk})
+                    elif et == "error":
+                        error = event.get("data") or "unknown error"
+                        await session_manager.broadcast(rt, {"type": "error", "message": error, "code": "stream_error"})
+                    elif et == "done":
+                        stop_reason = event.get("stop_reason", "stop")
+            except Exception as e:
+                error = str(e)
+                log.exception("Multiplayer reroll stream failed for room %s", room_code)
+                await session_manager.broadcast(rt, {"type": "error", "message": error, "code": "stream_exception"})
+
+            gm_text = "".join(buf).strip()
+            partial = stop_reason == "length" or (error is not None and bool(gm_text))
+
+            if gm_text:
+                async def _persist(st: CampaignState) -> CampaignState:
+                    import schema as _schema
+
+                    st.messages.append(
+                        _schema.Message(
+                            turn_id=turn_id,
+                            role=Role.USER,
+                            content=prev_user.content,
+                            is_kickoff=target_is_kickoff,
+                            player_slot=acting_slot.value if acting_slot else None,
+                        )
+                    )
+                    gm_msg = _schema.Message(
+                        turn_id=turn_id,
+                        role=Role.ASSISTANT,
+                        content=gm_text,
+                        partial=partial,
+                        is_kickoff=target_is_kickoff,
+                        player_slot=acting_slot.value if acting_slot else None,
+                    )
+                    st.messages.append(gm_msg)
+                    status = "skipped" if target_is_kickoff else "pending"
+                    st.side_effects.setdefault(gm_msg.id, MessageSideEffects(status=status))
+                    state_manager.record_event(
+                        st,
+                        "turn.multiplayer.reroll",
+                        f"Multiplayer reroll saved (msg={gm_msg.id}, stop={stop_reason}).",
+                    )
+                    return st
+
+                new_state = await state_manager.mutate_state(campaign_id, _persist)
+                if new_state is not None:
+                    gm_msg_id = new_state.messages[-1].id
+    finally:
+        restored = await session_manager.finish_aux_generation(room_code, restore_status)
+        if restored is not None:
+            active = session_manager.current_active_slot(restored)
+            await session_manager.broadcast(
+                restored,
+                {
+                    "type": "generation_done",
+                    "turn_number": restored.turn_number,
+                    "turn_id": turn_id,
+                    "gm_msg_id": gm_msg_id,
+                    "target_message_id": resolved_target_id,
+                    "stop_reason": stop_reason,
+                    "partial": partial,
+                    "acting_slot": acting_slot.value if acting_slot else None,
+                    "actor_name": actor_name,
+                    "player_action": player_action,
+                    "is_kickoff": target_is_kickoff,
+                    "mode": "reroll",
+                    "next_active_slot": active.value if active else None,
+                },
+            )
+            await _broadcast_session_state(restored)
+
+    if gm_msg_id and gm_text and acting_slot is not None and not target_is_kickoff:
+        asyncio.create_task(
+            _background_after_multiplayer_turn(
+                room_code=room_code,
+                campaign_id=campaign_id,
+                acting_slot=acting_slot,
+                action_text=player_action,
+                gm_msg_id=gm_msg_id,
+                gm_text=gm_text,
+            )
+        )
+
+
+async def _run_multiplayer_continue(
+    room_code: str,
+    restore_status: SessionStatus,
+    target_message_id: str | None,
+) -> None:
+    """Append continuation text to the latest multiplayer assistant message."""
+    rt = await session_manager.get_session(room_code)
+    if rt is None:
+        return
+
+    campaign_id = rt.campaign_id
+    campaign_id_ctx.set(campaign_id)
+    stop_reason = "stop"
+    partial = False
+    appended = ""
+    gm_msg_id: str | None = None
+    acting_slot: PlayerSlot | None = None
+    actor_name = ""
+    player_action = ""
+
+    continue_prompt = (
+        "Continue the previous narration without repeating anything you already wrote. "
+        "Pick up mid-scene and keep the prose flowing."
+    )
+
+    try:
+        async with state_manager.turn_lock(campaign_id):
+            state = await state_manager.load_state(campaign_id)
+            if state is None or state.multiplayer is None:
+                await session_manager.broadcast(rt, {"type": "error", "message": "campaign missing or not multiplayer", "code": "campaign_missing"})
+                return
+
+            target_index = _latest_assistant_index(state, target_message_id)
+            if target_index < 0 or state.messages[target_index].role != Role.ASSISTANT:
+                await session_manager.broadcast(rt, {"type": "error", "message": "target must be an assistant message", "code": "invalid_message"})
+                return
+            target = state.messages[target_index]
+            gm_msg_id = target.id
+            acting_slot = _coerce_slot(target.player_slot)
+            actor_name = "Opening Scene" if target.is_kickoff else _multiplayer_actor_name(state, acting_slot)
+            if target.turn_id:
+                user_msg = next((m for m in state.messages if m.turn_id == target.turn_id and m.role == Role.USER), None)
+                if user_msg is not None:
+                    player_action = "" if target.is_kickoff else _display_multiplayer_action(user_msg.content)
+
+            memories = memory.retrieve_relevant_memories(campaign_id, target.content, n_results=3)
+            built = prompt_builder.build_prompt(
+                state=state,
+                user_message=continue_prompt,
+                retrieved_memories=memories,
+            )
+            _LAST_PROMPT[campaign_id] = {
+                "system_prompt": built.system_prompt,
+                "stats": built.stats.model_dump(),
+                "memories": memories,
+                "timestamp": datetime.now(timezone.utc).isoformat(),
+            }
+
+            await session_manager.broadcast(
+                rt,
+                {
+                    "type": "generation_start",
+                    "turn_number": rt.turn_number,
+                    "acting_slot": acting_slot.value if acting_slot else None,
+                    "actor_name": actor_name,
+                    "player_action": player_action,
+                    "is_kickoff": target.is_kickoff,
+                    "mode": "continue",
+                    "target_message_id": target.id,
+                    "prompt_stats": built.stats.model_dump(),
+                },
+            )
+
+            buf: list[str] = []
+            error: str | None = None
+            try:
+                async for event in stream_chat(
+                    built.messages,
+                    model=state.models.gm,
+                    overrides=state.sampling_overrides,
+                ):
+                    et = event.get("type")
+                    if et == "token":
+                        chunk = event["data"]
+                        buf.append(chunk)
+                        await session_manager.broadcast(rt, {"type": "token", "text": chunk})
+                    elif et == "error":
+                        error = event.get("data") or "unknown error"
+                        await session_manager.broadcast(rt, {"type": "error", "message": error, "code": "stream_error"})
+                    elif et == "done":
+                        stop_reason = event.get("stop_reason", "stop")
+            except Exception as e:
+                error = str(e)
+                log.exception("Multiplayer continue stream failed for room %s", room_code)
+                await session_manager.broadcast(rt, {"type": "error", "message": error, "code": "stream_exception"})
+
+            appended = "".join(buf).strip()
+            partial = stop_reason == "length" or (error is not None and bool(appended))
+
+            if appended:
+                async def _apply(st: CampaignState) -> CampaignState:
+                    for message in reversed(st.messages):
+                        if message.id == target.id and message.role == Role.ASSISTANT:
+                            separator = "" if message.content.endswith(("\n", " ")) else " "
+                            message.content = message.content + separator + appended
+                            message.partial = partial
+                            break
+                    state_manager.record_event(
+                        st,
+                        "turn.multiplayer.continue",
+                        f"Multiplayer continuation appended to {target.id} (stop={stop_reason}).",
+                    )
+                    return st
+
+                await state_manager.mutate_state(campaign_id, _apply)
+    finally:
+        restored = await session_manager.finish_aux_generation(room_code, restore_status)
+        if restored is not None:
+            active = session_manager.current_active_slot(restored)
+            await session_manager.broadcast(
+                restored,
+                {
+                    "type": "generation_done",
+                    "turn_number": restored.turn_number,
+                    "gm_msg_id": gm_msg_id,
+                    "target_message_id": gm_msg_id,
+                    "stop_reason": stop_reason,
+                    "partial": partial,
+                    "acting_slot": acting_slot.value if acting_slot else None,
+                    "actor_name": actor_name,
+                    "player_action": player_action,
+                    "mode": "continue",
+                    "next_active_slot": active.value if active else None,
+                },
+            )
+            await _broadcast_session_state(restored)
+
+
+async def _run_multiplayer_kickoff(room_code: str) -> None:
+    """Generate and persist the shared multiplayer opening scene."""
+    rt = await session_manager.begin_kickoff_if_needed(room_code)
+    if rt is None:
+        return
+
+    campaign_id = rt.campaign_id
+    campaign_id_ctx.set(campaign_id)
+    turn_id = f"turn_{uuid.uuid4().hex[:12]}"
+    gm_msg_id: str | None = None
+    stop_reason = "stop"
+    partial = False
+    started = False
+
+    try:
+        async with state_manager.turn_lock(campaign_id):
+            state = await state_manager.load_state(campaign_id)
+            if state is None or state.multiplayer is None:
+                await session_manager.broadcast(
+                    rt,
+                    {
+                        "type": "error",
+                        "message": "campaign missing or not multiplayer",
+                        "code": "campaign_missing",
+                    },
+                )
+                return
+
+            if any(m.is_kickoff and m.role == Role.ASSISTANT for m in state.messages):
+                return
+
+            kickoff_prompt = (
+                "Begin the shared opening scene for this multiplayer session. "
+                "Introduce both player characters, establish the immediate situation, "
+                "and end at a decision point for the host to answer first."
+            )
+            built = prompt_builder.build_prompt(
+                state=state,
+                user_message=kickoff_prompt,
+                retrieved_memories=[],
+                turn_context="",
+            )
+            _LAST_PROMPT[campaign_id] = {
+                "system_prompt": built.system_prompt,
+                "stats": built.stats.model_dump(),
+                "memories": [],
+                "timestamp": datetime.now(timezone.utc).isoformat(),
+            }
+
+            await session_manager.broadcast(
+                rt,
+                {
+                    "type": "generation_start",
+                    "turn_number": rt.turn_number,
+                    "acting_slot": None,
+                    "actor_name": "Opening Scene",
+                    "player_action": "",
+                    "is_kickoff": True,
+                    "prompt_stats": built.stats.model_dump(),
+                },
+            )
+            started = True
+
+            buf: list[str] = []
+            error: str | None = None
+            try:
+                async for event in stream_chat(
+                    built.messages,
+                    model=state.models.gm,
+                    overrides=state.sampling_overrides,
+                ):
+                    et = event.get("type")
+                    if et == "token":
+                        chunk = event["data"]
+                        buf.append(chunk)
+                        await session_manager.broadcast(rt, {"type": "token", "text": chunk})
+                    elif et == "error":
+                        error = event.get("data") or "unknown error"
+                        await session_manager.broadcast(rt, {"type": "error", "message": error, "code": "stream_error"})
+                    elif et == "done":
+                        stop_reason = event.get("stop_reason", "stop")
+            except Exception as e:
+                error = str(e)
+                log.exception("Multiplayer kickoff stream failed for room %s", room_code)
+                await session_manager.broadcast(
+                    rt,
+                    {"type": "error", "message": error, "code": "stream_exception"},
+                )
+
+            gm_text = "".join(buf).strip()
+            partial = stop_reason == "length" or (error is not None and bool(gm_text))
+
+            if gm_text:
+                async def _persist(st: CampaignState) -> CampaignState:
+                    import schema as _schema
+
+                    st.messages.append(
+                        _schema.Message(
+                            turn_id=turn_id,
+                            role=Role.USER,
+                            content=kickoff_prompt,
+                            is_kickoff=True,
+                        )
+                    )
+                    gm_msg = _schema.Message(
+                        turn_id=turn_id,
+                        role=Role.ASSISTANT,
+                        content=gm_text,
+                        partial=partial,
+                        is_kickoff=True,
+                    )
+                    st.messages.append(gm_msg)
+                    st.side_effects.setdefault(gm_msg.id, MessageSideEffects(status="skipped"))
+                    state_manager.record_event(
+                        st,
+                        "turn.multiplayer.kickoff",
+                        f"Multiplayer kickoff saved (msg={gm_msg.id}, stop={stop_reason}).",
+                    )
+                    return st
+
+                new_state = await state_manager.mutate_state(campaign_id, _persist)
+                if new_state is not None:
+                    gm_msg_id = new_state.messages[-1].id
+    finally:
+        finished = await session_manager.finish_kickoff(room_code)
+        if finished is not None and started:
+            await session_manager.broadcast(
+                finished,
+                {
+                    "type": "generation_done",
+                    "turn_number": finished.turn_number,
+                    "turn_id": turn_id,
+                    "gm_msg_id": gm_msg_id,
+                    "stop_reason": stop_reason,
+                    "partial": partial,
+                    "acting_slot": None,
+                    "actor_name": "Opening Scene",
+                    "player_action": "",
+                    "is_kickoff": True,
+                    "next_active_slot": PlayerSlot.HOST.value,
+                },
+            )
+            await _broadcast_session_state(finished)
 
 
 async def _run_multiplayer_turn(room_code: str) -> None:
@@ -1689,6 +2402,7 @@ async def _run_multiplayer_turn(room_code: str) -> None:
     if gm_msg_id and gm_text:
         asyncio.create_task(
             _background_after_multiplayer_turn(
+                room_code=room_code,
                 campaign_id=campaign_id,
                 acting_slot=acting_slot,
                 action_text=action_text,

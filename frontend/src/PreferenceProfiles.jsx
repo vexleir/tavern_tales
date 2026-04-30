@@ -779,6 +779,9 @@ export default function PreferenceProfiles({ onBack, onCreateCampaignFromDraft }
               >
                 <span className="block text-sm font-bold text-amber-400">{summary.displayName}</span>
                 <span className="block text-xs text-slate-500 mt-1">v{summary.profileVersion}</span>
+                {summary.linked_campaigns?.length > 0 && (
+                  <span className="block text-xs text-emerald-600 mt-0.5">Used in {summary.linked_campaigns.length} campaign(s)</span>
+                )}
               </button>
             ))}
           </div>

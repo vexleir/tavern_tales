@@ -142,6 +142,8 @@ class RulesConfig(BaseModel):
     default_dc: int = 12
     tone: str = "dark fantasy"
     response_length: str = "concise"
+    summary_short_interval: int = 5
+    summary_chapter_interval: int = 20
 
 
 class QuestObjective(BaseModel):
@@ -290,6 +292,7 @@ class CampaignSummary(BaseModel):
     player: str
     title: str = ""
     created_at: str | None = None
+    has_archived_multiplayer: bool = False
 
 
 # ---------------------------------------------------------------------------

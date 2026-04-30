@@ -1,6 +1,6 @@
 # Tavern Tales Reborn — v2 Implementation Plan
 
-**Document Status:** Draft for Developer Review  
+**Document Status:** Implementation in Progress  
 **Based On:** QA/UX Evaluation (playthrough2_notes.md, 2026-04-30)  
 **Architecture Snapshot:** FastAPI backend (`backend/`) + React/Vite frontend (`frontend/src/`)  
 **Schema Version:** 2 (no migration; all new fields require `Field(default_factory=...)`)
@@ -18,6 +18,268 @@ This plan is organized into **7 Epics**, each containing **Stories**, each conta
 - `SCHEMA` = adds or modifies a Pydantic model in `backend/schema.py` (always backward-compatible via default factories)
 - `TEST` = requires new or updated test in `backend/tests/`
 - File paths are relative to the repo root
+
+---
+
+## Implementation Progress
+
+### 2026-04-30 — Codex Takeover: Epic 1 Complete, Story 2.1 Complete
+
+**Completed tasks:** 1.1.1, 1.1.2, 1.1.3, 1.2.1, 1.2.2, 1.3.1, 1.3.2, 1.3.3, 1.4.1, 1.4.2, 1.5.1, 1.5.2, 1.5.3, 1.6.1, 1.6.2, 1.7.1, 1.7.2, 1.7.3, 1.7.4, 1.8.1, 1.8.2, 2.1.1, 2.1.2, 2.1.3, 7.2.1, 7.2.3.
+
+**Files changed:** `frontend/src/App.jsx`, `frontend/src/CampaignCreator.jsx`, `frontend/src/components/HelpModal.jsx`.
+
+**What changed:**
+- Single-player control language now uses player-facing labels: "Send" and "Branch Story"; Director Mode has the "edit world state" subtitle in both states.
+- Prompt Inspector is available outside Director Mode; Debug Bundle remains Director Mode-only.
+- Token usage now displays percentage, raw tokens in the tooltip, and progressbar accessibility attributes.
+- Latest risky action rolls render inline between the player action and the GM response via `RollResultBadge`.
+- Campaign cards show `Started Mon DD, YYYY` instead of raw campaign IDs. Backend `created_at` population was verified in `state_manager.list_campaigns`.
+- Quick Actions default to visible, persist only the explicit hidden state as `tt_quick_actions=false`, and templates with bracket placeholders now open an inline fill-in popover with Escape and outside-click dismissal.
+- Play textarea auto-grows up to 160px and streaming narration keeps the scroll anchor in view.
+- Continue/Reroll edge cases were tightened: partial responses always allow Continue, and Reroll confirms before discarding partial text.
+- Duplicate stat names are blocked in CampaignCreator. Director Mode currently edits stat values only, so stat-name duplication is not creatable there; a guard now prevents editing unknown stat keys.
+- Active Preference Context in the sidebar opens the Preference Profiles editor as an overlay, and the main menu shows a first-time Preference Profiles nudge when there are no campaigns and no profiles.
+- First-run Help opens automatically when `tt_has_launched` is absent. The Help modal includes a "Don't show this automatically next time" checkbox, and the menu has a "What is this?" link.
+- The narrative message list now has `aria-live="polite"` and the token bar has progressbar ARIA attributes, completing tasks 7.2.1 and 7.2.3 opportunistically.
+
+**Future developer notes:**
+- The actual preference profile endpoint is `/api/preference-profiles`, not `/api/preferences/profiles` as written in Story 1.8.2. Use the existing endpoint unless the API is intentionally renamed.
+- `ActionResolution` is currently SSE start metadata, not persisted on individual `Message` records. The inline roll badge therefore represents the latest streamed turn only. If historical roll badges are needed after reload, add an action-resolution field to persisted message/side-effect state.
+- A render-time bug from the earlier in-progress work was fixed: `isStreaming` was referenced by an effect before `useNdjsonStream()` declared it.
+- React 19 hook linting rejects synchronous `setState` inside effects. First-run Help now uses lazy initial state instead of a mount effect.
+
+**Verification:** Full `.\check.ps1` passes: 108 backend tests, frontend lint, and frontend production build.
+
+### 2026-04-30 — Epic 2 Complete: Quick Start, Templates, Health, Regenerate, Pass Turn
+
+**Completed tasks:** 2.2.1, 2.2.2, 2.2.3, 2.3.1, 2.3.2, 2.3.3, 2.4.1, 2.4.2, 2.4.3, 2.5.1, 2.5.2.
+
+**Files changed:** `backend/main.py`, `backend/tests/test_chat_flow.py`, `frontend/src/App.jsx`, `frontend/src/CampaignCreator.jsx`, `frontend/src/data/worldTemplates.js`.
+
+**What changed:**
+- World Forge now opens in Quick Start mode with template cards, world concept, character name, and a single Begin button.
+- Advanced Setup is session-persisted via `tt_advanced_open` and reveals Models, Session Mode, generated world detail, protagonist detail, Cast, and Lorebook.
+- Quick Start automatically runs Auto-Forge before campaign creation when a world concept exists and generated world details are empty.
+- Added six world templates: High Fantasy, Gritty Dark Fantasy, Sci-Fi, Horror, Historical, and Modern Paranormal.
+- Added `GET /api/health`, returning Ollama reachability and model count.
+- CampaignCreator shows an Ollama-unreachable banner with pull command and Retry action.
+- Utility Model defaults to auto mode (`utilityModel === ''`) and displays an amber auto indicator.
+- Auto-Forge results can be regenerated after a successful generation.
+- Single-player play view now has a Pass Turn action that submits "I observe and wait, taking no action this turn."
+
+**Future developer notes:**
+- `handleGenerateWorld()` now returns the generated JSON and `handleStart()` uses that return value directly when auto-forging. This avoids a React state timing race during Quick Start campaign creation.
+- Leaving `utilityModel` as `''` is intentional: it means auto mode and lets the backend resolver choose the best available utility model.
+- Template selection pre-fills NPCs and lorebook for review, but Quick Start auto-forge may replace them with model-generated setup if the player begins without manually generating first.
+
+**Verification:** Full `.\check.ps1` passes: 110 backend tests, frontend lint, and frontend production build.
+
+### 2026-04-30 — Epic 3 Story 3.2 Complete: Player Actions Visible in Multiplayer Narrative
+
+**Completed tasks:** 3.2.1, 3.2.2, 3.2.3, 3.2.4, 3.2.5, 3.2.6.
+
+**Files changed:** `backend/main.py`, `backend/tests/test_multiplayer_api.py`, `frontend/src/MultiplayerPlay.jsx`, `frontend/src/hooks/useMultiplayerSession.js`.
+
+**What changed:**
+- Multiplayer session export now pairs assistant turns with the user action from the same `turn_id`.
+- Export response includes `gm_content` and `player_action` while retaining `content` for backward compatibility.
+- Live `generation_start` WebSocket messages include the submitted `player_action`.
+- The multiplayer hook stores `playerAction` in `currentGeneration` and `lastCompletedGeneration`.
+- `NarrationBlock` now renders `{actor} said: "{playerAction}"` above the GM narration for both exported history and live streaming turns.
+
+**Future developer notes:**
+- The persisted multiplayer user message still stores the prompt-formatted command text to preserve existing prompt-history behavior. The export route derives display text with `_display_action()`.
+- If future schema work adds a first-class `Message.display_content` or `player_action` field, `export_multiplayer_narrative()` can stop parsing the formatted prompt text.
+
+**Verification:** Full `.\check.ps1` passes: 110 backend tests, frontend lint, and frontend production build.
+
+### 2026-04-30 — Epic 3 Story 3.1 Complete: Multiplayer Opening Kickoff Scene
+
+**Completed tasks:** 3.1.1, 3.1.2, 3.1.3, 3.1.4, 3.1.5, 3.1.6.
+
+**Files changed:** `backend/session_manager.py`, `backend/main.py`, `backend/tests/test_session_manager.py`, `backend/tests/test_multiplayer_api.py`, `frontend/src/MultiplayerPlay.jsx`, `frontend/src/hooks/useMultiplayerSession.js`.
+
+**What changed:**
+- `SessionRuntime` now tracks `kickoff_needed` and `kickoff_in_progress` in memory.
+- When both players ready up from the lobby and no kickoff exists, the session marks kickoff as needed and the WebSocket handler starts `_run_multiplayer_kickoff()`.
+- Multiplayer kickoff streams to both players via `generation_start` / `token` / `generation_done` messages with `is_kickoff=true`.
+- Kickoff is persisted as a shared `is_kickoff=True` assistant message and is skipped if one already exists.
+- The multiplayer play view shows live and exported kickoff narration, labels it "Opening Scene", and locks input with "Waiting for the opening scene..." while streaming.
+
+**Future developer notes:**
+- The plan referenced `prompt_builder.build_kickoff_prompt()`, but no such helper exists. `_run_multiplayer_kickoff()` uses the existing `prompt_builder.build_prompt()` with a multiplayer-specific synthetic kickoff prompt.
+- `kickoff_needed` / `kickoff_in_progress` are runtime-only flags. The persisted source of truth for "already kicked off" is any assistant message with `is_kickoff=True`.
+- `submit_action()` rejects actions while kickoff is pending/in progress to prevent the host from racing the opening scene.
+
+**Verification:** Full `.\check.ps1` passes: 112 backend tests, frontend lint, and frontend production build.
+
+### 2026-04-30 — Epic 3 Story 3.3 Complete: Character Sheet Panel in Multiplayer Play
+
+**Completed tasks:** 3.3.1, 3.3.2, 3.3.3, 3.3.4.
+
+**Files changed:** `backend/main.py`, `frontend/src/MultiplayerPlay.jsx`.
+
+**What changed:**
+- Added `CharacterSheetsPanel` to the multiplayer play sidebar after OOC chat.
+- The panel reads from `multiplayer.host_character` and `multiplayer.guest_character`, showing each character's name, location, gender, stats, and inventory.
+- "My Character" opens by default and "Partner's Character" starts collapsed; on mobile, the whole panel starts collapsed to preserve narrative space.
+- After multiplayer post-turn extraction applies slot-aware stats/location/inventory updates, `_background_after_multiplayer_turn()` now rebroadcasts `session_state` so clients receive fresh `multiplayer` character data.
+
+**Future developer notes:**
+- Story 3.4 extended `CharacterSheetCard` with own-character edit controls and added stats/inventory backend support. Continue building future character-sheet features in that component.
+- The post-extraction rebroadcast is best-effort: if the room was archived/deleted before background work finishes, `get_session(room_code)` returns `None` and no broadcast is sent.
+
+**Verification:** Full `.\check.ps1` passes: 112 backend tests, frontend lint, and frontend production build.
+
+### 2026-04-30 — Epic 3 Story 3.4 Complete: Multiplayer Director Mode (Own Character Only)
+
+**Completed tasks:** 3.4.1, 3.4.2, 3.4.3, 3.4.4, 3.4.5.
+
+**Files changed:** `backend/session_manager.py`, `backend/main.py`, `backend/tests/test_multiplayer_api.py`, `frontend/src/MultiplayerSession.jsx`, `frontend/src/MultiplayerPlay.jsx`.
+
+**What changed:**
+- `session_manager.update_character()` now accepts sanitized `stats` and `inventory` updates in addition to the existing text/location fields.
+- The HTTP character route and WebSocket `update_character` handler pass stats and inventory through to the session manager.
+- `MultiplayerPlay` now passes `onUpdateCharacter` into the character sheet panel, and the player's own sheet has an inline Edit mode.
+- Edit mode supports location, appearance, per-stat number fields, inventory remove, inventory add, Save, and Cancel.
+- WebSocket character updates remain sender-slot scoped: the handler ignores any target slot in the payload and updates only the connected player's assigned slot.
+
+**Future developer notes:**
+- The play-view editor uses WebSocket updates for slot scoping. The legacy `POST /api/session/{room_code}/character` route is extended for compatibility, but it still trusts the body `slot`; add explicit auth/slot headers before using that route for guest-facing privileged edits.
+- `update_character()` replaces the full stats dict and inventory list when those fields are provided. Partial stat patches should be implemented as a separate helper if future UI needs them.
+
+**Verification:** Full `.\check.ps1` passes: 113 backend tests, frontend lint, and frontend production build.
+
+### 2026-04-30 — Epic 3 Story 3.5 Complete: WebSocket Reconnect Hardening
+
+**Completed tasks:** 3.5.1, 3.5.2, 3.5.3, 3.5.4, 3.5.5, 3.5.6.
+
+**Files changed:** `backend/main.py`, `backend/tests/test_multiplayer_api.py`, `frontend/src/hooks/useMultiplayerSession.js`, `frontend/src/MultiplayerSession.jsx`, `frontend/src/MultiplayerPlay.jsx`.
+
+**What changed:**
+- Reconnect retry timing now uses a capped exponential `getReconnectDelay()` with no fixed attempt limit.
+- The backend rejects reconnect attempts with `code: "session_expired"` once the paused session's reconnect window has elapsed.
+- The frontend treats `session_expired` as terminal, stops retrying, and shows a clear Session expired screen.
+- Multiplayer play now receives `reconnectAttempt` and shows a non-blocking reconnecting banner.
+- When the session is paused with `paused_since`, the play header shows a live `MM:SS` countdown from `paused_since + reconnect_window_seconds`.
+
+**Future developer notes:**
+- A server cannot send an error over a WebSocket that has already raised `WebSocketDisconnect`. Expiry is enforced on the next reconnect attempt, and the still-connected client sees the countdown reach zero in the play header.
+- `SessionRuntime.public_state()` already included `paused_since` and `reconnect_window_seconds`; Story 3.5 relies on those fields rather than adding a new WebSocket payload shape.
+
+**Verification:** Full `.\check.ps1` passes: 114 backend tests, frontend lint, and frontend production build.
+
+### 2026-04-30 — Epic 3 Story 3.6 Complete: OOC Message Persistence
+
+**Completed tasks:** 3.6.1, 3.6.2, 3.6.3, 3.6.4, 3.6.5, 3.6.6, 3.6.7.
+
+**Files changed:** `backend/session_manager.py`, `backend/main.py`, `backend/tests/test_session_manager.py`, `frontend/src/hooks/useMultiplayerSession.js`.
+
+**What changed:**
+- Added per-room OOC JSONL logs under `backend/sessions/{room_code}_ooc.jsonl`.
+- Added `session_manager.append_ooc()` and `session_manager.read_ooc_log()` with message normalization, last-N reads, and serialized file access.
+- The WebSocket `ooc_message` handler now broadcasts a timestamped message, then persists the same payload to the OOC log.
+- The `slot_assigned` handshake response now includes `ooc_log` with the latest 100 persisted OOC messages for join/reconnect hydration.
+- The multiplayer hook hydrates `oocMessages` from `slot_assigned.ooc_log` and caps in-memory display to the latest 50 messages.
+- `delete_session()` removes the room's OOC log along with the campaign. Archiving leaves the log in place with the rest of the session artifacts.
+
+**Future developer notes:**
+- There is no standalone `ooc_hydrate` WebSocket message. `ooc_hydrate` is a frontend reducer action fed by the existing `slot_assigned.ooc_log` field.
+- Live OOC broadcast happens before file append by design. If append fails, both connected clients still see the message, and the server logs the persistence failure.
+- The OOC log is not archived into the campaign transcript. Story 4.8 transcript work should decide explicitly whether to include OOC or keep it separate.
+
+**Verification:** Full `.\check.ps1` passes: 115 backend tests, frontend lint, and frontend production build.
+
+### 2026-04-30 — Epic 3 Story 3.7 Complete: Turn Order Controls & Pass Turn
+
+**Completed tasks:** 3.7.1, 3.7.2, 3.7.3, 3.7.4, 3.7.5, 3.7.6.
+
+**Files changed:** `backend/session_manager.py`, `backend/main.py`, `backend/tests/test_session_manager.py`, `backend/tests/test_multiplayer_api.py`, `frontend/src/MultiplayerLobby.jsx`, `frontend/src/MultiplayerPlay.jsx`, `frontend/src/MultiplayerSession.jsx`, `frontend/src/hooks/useMultiplayerSession.js`.
+
+**What changed:**
+- Added `session_manager.set_starting_slot()` and the host-only WebSocket `set_starting_slot` message for lobby first-actor selection.
+- Fixed the ready transition so it honors `starting_slot_this_round` instead of always resetting the first active player to host.
+- Added the host lobby "Who goes first?" Host/Guest radio control.
+- Added a player-facing Pass Turn button that submits `I wait and observe this turn.` as a normal action.
+- Added the host-only WebSocket `gift_turn` message, which advances from `HOST_TURN` to `GUEST_TURN` without generating AI narration.
+- Added a host play-view "Gift Turn to Partner" control when the host has the floor.
+
+**Future developer notes:**
+- `gift_turn` currently only applies during `HOST_TURN`; it is not a general moderator override for guest turns.
+- `begin_next_round()` is used for gift-turn advancement, so gifted turns increment `turn_number` the same way a completed generated turn does.
+- `SessionRuntime.public_state()` now includes `kickoff_needed` in addition to `kickoff_in_progress` so clients can hide controls during the queued-opening-scene gap.
+
+**Verification:** Full `.\check.ps1` passes: 118 backend tests, frontend lint, and frontend production build.
+
+### 2026-04-30 — Epic 3 Story 3.8 Complete: Reroll & Continue in Multiplayer
+
+**Completed tasks:** 3.8.1, 3.8.2, 3.8.3, 3.8.4, 3.8.5.
+
+**Files changed:** `backend/session_manager.py`, `backend/main.py`, `backend/tests/test_multiplayer_api.py`, `frontend/src/MultiplayerPlay.jsx`, `frontend/src/MultiplayerSession.jsx`, `frontend/src/hooks/useMultiplayerSession.js`.
+
+**What changed:**
+- Added auxiliary generation helpers so reroll/continue can enter `GENERATING` and then restore the current floor instead of passing the turn.
+- Added WebSocket `request_reroll` and `request_continue` handlers.
+- Multiplayer reroll removes the target assistant turn group with rollback, streams a replacement to both players, and persists a new user/assistant pair.
+- Multiplayer continue streams appended text and writes it back onto the existing assistant message without creating a new turn.
+- The multiplayer hook now tracks generation `mode`, `target_message_id`, `gm_msg_id`, and `partial` metadata.
+- The play view shows Reroll / Continue controls after the latest GM block; Continue appears for partial or abrupt-ending narration.
+
+**Future developer notes:**
+- Reroll intentionally restores the same floor after completion. The plan's task table said "does NOT advance the turn", which matches the implemented behavior and avoids consuming the next player's turn while rewriting the previous GM response.
+- The current Reroll confirmation uses `window.confirm()` inside `MultiplayerPlay` because the multiplayer route does not yet receive the app-level modal provider. If Story 3.9 or later centralizes multiplayer modals, swap this to the shared modal.
+- Reroll reuses `_rollback_message_group()`, which also removes side effects and memories for the old turn group before regenerating.
+
+**Verification:** Full `.\check.ps1` passes: 120 backend tests, frontend lint, and frontend production build.
+
+### 2026-04-30 — Epic 3 Story 3.9 Complete: Multiplayer UX Polish
+
+**Completed tasks:** 3.9.1, 3.9.2, 3.9.3, 3.9.4, 3.9.5, 3.9.6, 3.9.7.
+
+**Files changed:** `backend/main.py`, `backend/tests/test_multiplayer_api.py`, `frontend/src/MultiplayerLobby.jsx`, `frontend/src/MultiplayerPlay.jsx`, `frontend/src/MultiplayerSession.jsx`.
+
+**What changed:**
+- Archive and Delete in the multiplayer play header now ask for confirmation before sending WebSocket commands.
+- The Party panel no longer prints raw `host` / `guest` slot keys; it uses character or display names.
+- Lobby character edits auto-save on field blur with a 1-second debounce and show a `✓ Saved` badge for 2 seconds.
+- When both players ready up, the multiplayer session displays a 3-second "Session starting" countdown before showing the play view.
+- Added unauthenticated `GET /api/session/{room_code}/exists` returning `{ exists, status }`.
+- The join form debounces room-code validation, shows found/not-found status, and disables Connect until the room exists.
+- The join form asks for confirmation before backing out when a quick/imported preference profile is configured.
+
+**Future developer notes:**
+- React 19 lint rejects synchronous `setState` in effect bodies. Countdown and room-code validation status updates are scheduled with `setTimeout()` callbacks to stay compatible.
+- Lobby auto-save still uses the existing WebSocket `update_character` path; there is no explicit save acknowledgement, so the `✓ Saved` badge indicates that the save was sent.
+- The room existence endpoint intentionally does not expose campaign metadata or player names.
+
+**Verification:** Full `.\check.ps1` passes: 121 backend tests, frontend lint, and frontend production build.
+
+### 2026-04-30 — Epics 3.10–3.11, 6, and 7 Complete (resumed session)
+
+**Completed tasks:** 3.10.1, 3.10.2, 3.11.1, 3.11.2, 3.11.3, 6.1, 6.2, 6.3, 6.4, 6.5, 6.6.1, 6.6.2, 6.6.3, 6.6.4, 6.7.1, 6.7.2, 6.7.3, 7.1.1, 7.1.2, 7.1.3, 7.2.2, 7.2.4, 7.3.1, 7.3.2, 7.3.3, 7.3.4.
+
+**Files changed:** `backend/main.py`, `backend/schema.py`, `backend/session_manager.py`, `backend/state_manager.py`, `backend/rate_limit.py`, `backend/summarizer.py`, `frontend/src/App.jsx`, `frontend/src/MultiplayerSession.jsx`, `frontend/src/MultiplayerPlay.jsx`, `frontend/src/PreferenceProfiles.jsx`, `frontend/src/CampaignCreator.jsx`, `frontend/src/hooks/useMultiplayerSession.js`, `frontend/src/hooks/useNdjsonStream.js`, `frontend/src/components/ModalProvider.jsx`, `frontend/src/index.css`.
+
+**What changed:**
+- Story 3.10: `POST /api/campaigns/{id}/convert_to_solo` route strips multiplayer config from archived sessions. `CampaignSummary` gains `has_archived_multiplayer`; campaign list shows "Continue Solo" badge.
+- Story 3.11: `slot_assigned` WebSocket handler saves `tt_last_room` to localStorage. Menu checks the saved room code against `/api/session/{code}/exists` on load and shows a rejoin card when the session is still active.
+- Story 6.1 (Rate Limit UX): 429 response now includes `Retry-After` header and a descriptive "please wait N seconds" message.
+- Story 6.2 (Memory Isolation): `retrieve_relevant_memories` and `add_memory` wrapped in try/except; degraded mode with `memory_warning` banner flag.
+- Story 6.3 (Stream Drop Recovery): Ollama stream exceptions emit `type: error` with `partial: true`; frontend banner prompts user to Continue or Reroll.
+- Story 6.4 (GENERATING Recovery): `session_manager.initialize()` corrects sessions stuck in GENERATING by deriving the next valid slot from `starting_slot_this_round`.
+- Story 6.5 (Session Cleanup Loop): `_session_cleanup_loop()` background task runs every 30 min and archives expired sessions.
+- Story 6.6 (Summarizer Cadence Config): `RulesConfig` gains `summary_short_interval` and `summary_chapter_interval`; summarizer reads from `state.rules`. CampaignCreator exposes a cadence selector.
+- Story 6.7 (Preference Enhancements): `GET /api/preference-profiles` appends `linked_campaigns` cross-reference (bug fix: `p.id` → `p.profileId`). Profile cards show "Used in N campaign(s)". `QuickPreferenceForm` gains "Save as Profile…" inline form → `POST /api/preference-profiles/import`.
+- Story 7.1 (Keyboard Nav): Global `button:focus-visible` CSS rule for focus rings; `ModalProvider` focus trap (save/restore focus, Tab cycle, Escape); AppInner Escape key closes sidebar/inspector.
+- Story 7.2.2/7.2.4 (Screen Reader): `RosterPanel` connection dots get `sr-only` status text; all icon-only buttons get `aria-label`.
+- Story 7.3 (Mobile Layout): Single-player sidebar becomes a bottom sheet on mobile; "State" text button replaced by a floating action button; input area is `sticky bottom-0`; `MultiplayerPlay` uses a tab bar (Party | OOC) on mobile.
+
+**Bug fixes this session:**
+- `p.id` on `PreferenceProfileSummary` doesn't exist (correct field is `p.profileId`) — caused 500 → fixed.
+- Synchronous `setLastRoomCard(null)` in `useEffect` violated React 19 lint → wrapped in `window.setTimeout(..., 0)`.
+
+**Verification:** Full `.\check.ps1` passes: 121 backend tests, frontend lint, and frontend production build.
 
 ---
 
@@ -1098,7 +1360,7 @@ All schema changes are additive (default values provided). No migration required
 | `set_simultaneous_mode` | Client→Server | 4 | Toggle simultaneous action mode (host) |
 | `transfer_host` | Client→Server | 4 | Transfer host rights to guest |
 | `slot_reassigned` | Server→Client | 4 | Notify of host transfer |
-| `ooc_hydrate` | Server→Client | 3 | Send OOC log on reconnect |
+| `slot_assigned.ooc_log` | Server→Client | 3 | Existing handshake response includes recent OOC log for join/reconnect hydration |
 
 ---
 

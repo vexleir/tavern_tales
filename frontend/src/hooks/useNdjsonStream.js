@@ -45,7 +45,7 @@ export default function useNdjsonStream({ onError, onAbortWithTokens } = {}) {
             receivedToken = true;
             onToken?.(evt.data);
           } else if (evt.type === 'error') {
-            onError?.(evt.data);
+            onError?.(evt.data, evt);
           } else if (evt.type === 'done') {
             onDone?.(evt);
           }

@@ -213,12 +213,17 @@ async def list_campaigns() -> list[CampaignSummary]:
         try:
             with open(entry, "r", encoding="utf-8") as f:
                 raw = json.load(f)
+            mp = raw.get("multiplayer") or {}
+            has_archived_mp = (
+                mp.get("session_status") == "archived" and bool(mp)
+            )
             out.append(
                 CampaignSummary(
                     id=raw.get("campaign_id", entry.stem),
                     player=raw.get("player", {}).get("name", "Unknown"),
                     title=raw.get("title", "") or "",
                     created_at=raw.get("created_at"),
+                    has_archived_multiplayer=has_archived_mp,
                 )
             )
         except Exception as e:

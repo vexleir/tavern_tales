@@ -63,6 +63,57 @@ def _consume_stream(resp):
     return events
 
 
+def test_health_reports_ollama_models(monkeypatch, temp_state_dir, temp_chroma, mock_ollama):
+    import main
+
+    class FakeResponse:
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            return {"models": [{"name": "llama3"}, {"name": "qwen2.5"}]}
+
+    class FakeAsyncClient:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return None
+
+        async def get(self, url, timeout):
+            assert url == "http://localhost:11434/api/tags"
+            assert timeout == 2.0
+            return FakeResponse()
+
+    monkeypatch.setattr(main.httpx, "AsyncClient", FakeAsyncClient)
+
+    client = TestClient(main.app)
+    response = client.get("/api/health")
+    assert response.status_code == 200
+    assert response.json() == {"ollama": "ok", "models_available": 2}
+
+
+def test_health_reports_unreachable_ollama(monkeypatch, temp_state_dir, temp_chroma, mock_ollama):
+    import main
+
+    class FakeAsyncClient:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return None
+
+        async def get(self, url, timeout):
+            raise OSError("ollama down")
+
+    monkeypatch.setattr(main.httpx, "AsyncClient", FakeAsyncClient)
+
+    client = TestClient(main.app)
+    response = client.get("/api/health")
+    assert response.status_code == 200
+    assert response.json() == {"ollama": "unreachable", "models_available": 0}
+
+
 def test_init_and_list(client):
     c, _ = client
     _init_campaign(c)

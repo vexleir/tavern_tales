@@ -1,5 +1,25 @@
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
+import worldTemplates from './data/worldTemplates';
 import { apiFetch, describeApiError, parseErrorResponse } from './lib/api';
+
+function initialAdvancedOpen() {
+  try {
+    return window.sessionStorage?.getItem('tt_advanced_open') === 'true';
+  } catch {
+    return false;
+  }
+}
+
+function normalizeGeneratedNpcs(npcs = []) {
+  return npcs.map(n => ({
+    name: n.name,
+    disposition: n.disposition,
+    gender: n.gender || 'Unspecified',
+    appearance: n.appearance || '',
+    description: n.description || '',
+    secrets_known: n.secrets_known || []
+  }));
+}
 
 function buildInitialSetup(draft) {
   const seed = draft?.campaignSeed || {};
@@ -78,9 +98,14 @@ export default function CampaignCreator({ campaignId, initialFantasyDraft, onCom
 
   const [worldPrompt, setWorldPrompt] = useState(initialSetup.worldPrompt);
   const [isGenerating, setIsGenerating] = useState(false);
+  const [hasGenerated, setHasGenerated] = useState(false);
   const [storySummary, setStorySummary] = useState(initialSetup.storySummary);
   const [worldDescription, setWorldDescription] = useState(initialSetup.worldDescription);
   const [startingScene, setStartingScene] = useState(initialSetup.startingScene);
+  const [advancedOpen, setAdvancedOpen] = useState(initialAdvancedOpen);
+  const [selectedTemplate, setSelectedTemplate] = useState(null);
+  const [ollamaHealth, setOllamaHealth] = useState(null);
+  const [healthChecking, setHealthChecking] = useState(false);
 
   // Model configuration (A11)
   const [availableModels, setAvailableModels] = useState([]);
@@ -89,6 +114,7 @@ export default function CampaignCreator({ campaignId, initialFantasyDraft, onCom
   const [gmFilter, setGmFilter] = useState('');
   const [utilityFilter, setUtilityFilter] = useState('');
   const [hostMultiplayer, setHostMultiplayer] = useState(false);
+  const [summaryInterval, setSummaryInterval] = useState(5);
   const [submitError, setSubmitError] = useState('');
 
   const buildLanJoinUrl = (roomCode, lanIp) => {
@@ -101,6 +127,29 @@ export default function CampaignCreator({ campaignId, initialFantasyDraft, onCom
     }
   };
 
+  const refreshHealth = useCallback(async () => {
+    setHealthChecking(true);
+    try {
+      const res = await apiFetch('/api/health');
+      if (!res.ok) throw new Error(await parseErrorResponse(res));
+      setOllamaHealth(await res.json());
+    } catch {
+      setOllamaHealth({ ollama: 'unreachable', models_available: 0 });
+    } finally {
+      setHealthChecking(false);
+    }
+  }, []);
+
+  const toggleAdvanced = () => {
+    const next = !advancedOpen;
+    setAdvancedOpen(next);
+    try {
+      window.sessionStorage?.setItem('tt_advanced_open', String(next));
+    } catch {
+      // Session storage can be unavailable in privacy modes.
+    }
+  };
+
   useEffect(() => {
     try {
       window.localStorage?.removeItem('tt_preferred_gm');
@@ -109,39 +158,57 @@ export default function CampaignCreator({ campaignId, initialFantasyDraft, onCom
       // Privacy mode or disabled storage: nothing to clear.
     }
 
+    apiFetch('/api/health')
+      .then(async res => {
+        if (!res.ok) throw new Error(await parseErrorResponse(res));
+        return res.json();
+      })
+      .then(setOllamaHealth)
+      .catch(() => setOllamaHealth({ ollama: 'unreachable', models_available: 0 }));
+
     apiFetch('/api/models')
       .then(r => r.json())
       .then(data => {
         setAvailableModels(data);
-        const utilityPreferences = [
-          'llama3.1:8b-instruct',
-          'llama3.1:8b-instruct:latest',
-          'llama3.1:8b',
-          'llama3.1:8b:latest',
-          'qwen2.5:7b-instruct',
-          'qwen2.5:7b-instruct:latest',
-          'qwen2.5:7b',
-          'qwen2.5:7b:latest',
-          'llama3:8b',
-          'llama3:8b:latest',
-          'llama3',
-          'llama3:latest'
-        ];
         const gmChoice = data[0] || '';
         setGmModel(gmChoice);
-
-        const match = utilityPreferences.find(m => data.includes(m));
-        setUtilityModel(match || '');
+        setUtilityModel('');
       })
       .catch(err => console.error('Model list fetch failed:', err));
   }, []);
 
-  const handleGenerateWorld = async () => {
+  const applyGeneratedWorld = (data) => {
+    setProtagonist(p => ({
+      ...p,
+      location: data.player_starting_location || p.location,
+      gender: data.player_gender || p.gender,
+      appearance: data.player_appearance || p.appearance,
+      description: data.player_description || p.description
+    }));
+    if (data.npcs) setNpcs(normalizeGeneratedNpcs(data.npcs));
+    if (data.lorebook) setLorebook(data.lorebook);
+    if (data.story_summary) setStorySummary(data.story_summary);
+    if (data.world_description) setWorldDescription(data.world_description);
+    if (data.starting_scene) setStartingScene(data.starting_scene);
+    setHasGenerated(true);
+  };
+
+  const clearGeneratedFields = () => {
+    setWorldDescription('');
+    setStartingScene('');
+    setStorySummary('');
+    setNpcs([]);
+    setLorebook([]);
+    setHasGenerated(false);
+  };
+
+  const handleGenerateWorld = async ({ clearFirst = false } = {}) => {
     if (!worldPrompt.trim()) return;
     if (availableModels.length === 0) {
       setSubmitError('No models found — make sure Ollama is running and you have pulled at least one model (e.g. ollama pull llama3.1:8b-instruct).');
-      return;
+      return null;
     }
+    if (clearFirst) clearGeneratedFields();
     setSubmitError('');
     setIsGenerating(true);
     try {
@@ -157,25 +224,8 @@ export default function CampaignCreator({ campaignId, initialFantasyDraft, onCom
        });
        if(res.ok) {
           const data = await res.json();
-          setProtagonist(p => ({
-            ...p,
-            location: data.player_starting_location || p.location,
-            gender: data.player_gender || p.gender,
-            appearance: data.player_appearance || p.appearance,
-            description: data.player_description || p.description
-          }));
-          if(data.npcs) setNpcs(data.npcs.map(n => ({
-             name: n.name,
-             disposition: n.disposition,
-             gender: n.gender || 'Unspecified',
-             appearance: n.appearance || '',
-             description: n.description || '',
-             secrets_known: n.secrets_known || []
-          })));
-          if(data.lorebook) setLorebook(data.lorebook);
-          if(data.story_summary) setStorySummary(data.story_summary);
-          if(data.world_description) setWorldDescription(data.world_description);
-          if(data.starting_scene) setStartingScene(data.starting_scene);
+          applyGeneratedWorld(data);
+          return data;
        } else {
           const msg = await parseErrorResponse(res);
           setSubmitError(`World generation failed (${res.status}): ${msg}`);
@@ -185,6 +235,35 @@ export default function CampaignCreator({ campaignId, initialFantasyDraft, onCom
     } finally {
        setIsGenerating(false);
     }
+    return null;
+  };
+
+  const applyTemplate = (template) => {
+    setSelectedTemplate(template.id);
+    setWorldPrompt(template.worldPrompt);
+    setProtagonist(p => ({
+      ...p,
+      name: template.protagonistName,
+      location: template.startingLocation
+    }));
+    setNpcs(template.npcs);
+    setLorebook(template.lorebook);
+    setWorldDescription('');
+    setStartingScene('');
+    setStorySummary('');
+    setHasGenerated(false);
+  };
+
+  const clearTemplate = () => {
+    setSelectedTemplate(null);
+    setWorldPrompt(initialSetup.worldPrompt);
+    setProtagonist(initialSetup.protagonist);
+    setNpcs([]);
+    setLorebook(initialSetup.lorebook);
+    setWorldDescription(initialSetup.worldDescription);
+    setStartingScene(initialSetup.startingScene);
+    setStorySummary(initialSetup.storySummary);
+    setHasGenerated(false);
   };
 
   const handleGmModelChange = (value) => {
@@ -217,24 +296,46 @@ export default function CampaignCreator({ campaignId, initialFantasyDraft, onCom
       return;
     }
     try {
+      const generatedData = worldPrompt.trim() && !worldDescription.trim()
+        ? await handleGenerateWorld()
+        : null;
+      if (worldPrompt.trim() && !worldDescription.trim() && !generatedData) {
+        return;
+      }
+
+      const effectiveProtagonist = generatedData ? {
+        ...protagonist,
+        location: generatedData.player_starting_location || protagonist.location,
+        gender: generatedData.player_gender || protagonist.gender,
+        appearance: generatedData.player_appearance || protagonist.appearance,
+        description: generatedData.player_description || protagonist.description
+      } : protagonist;
+      const effectiveNpcs = generatedData?.npcs ? normalizeGeneratedNpcs(generatedData.npcs) : npcs;
+      const effectiveLorebook = generatedData?.lorebook || lorebook;
+      const effectiveStorySummary = generatedData?.story_summary || storySummary;
+      const effectiveWorldDescription = generatedData?.world_description || worldDescription;
+      const effectiveStartingScene = generatedData?.starting_scene || startingScene;
+
       const payload = {
         campaign_id: campaignId || `campaign_${Date.now()}`,
-        player_name: protagonist.name,
-        starting_location: protagonist.location,
-        player_gender: protagonist.gender || 'Unspecified',
-        player_appearance: protagonist.appearance || '',
-        player_description: protagonist.description || '',
+        player_name: effectiveProtagonist.name,
+        starting_location: effectiveProtagonist.location,
+        player_gender: effectiveProtagonist.gender || 'Unspecified',
+        player_appearance: effectiveProtagonist.appearance || '',
+        player_description: effectiveProtagonist.description || '',
         stats: stats.reduce((acc, s) => ({ ...acc, [s.name]: s.value }), {}),
         inventory: inventory,
-        npcs: npcs,
-        lorebook: lorebook.reduce((acc, l) => ({ ...acc, [l.keyword]: l.rule }), {}),
-        story_summary: storySummary,
-        world_description: worldDescription,
-        starting_scene: startingScene,
+        npcs: effectiveNpcs,
+        lorebook: effectiveLorebook.reduce((acc, l) => ({ ...acc, [l.keyword]: l.rule }), {}),
+        story_summary: effectiveStorySummary,
+        world_description: effectiveWorldDescription,
+        starting_scene: effectiveStartingScene,
         preference_context: buildPreferenceContext(initialFantasyDraft),
         gm_model: gmModel,
         utility_model: utilityModel || null,
-        nsfw_world_gen: false
+        nsfw_world_gen: false,
+        summary_short_interval: summaryInterval,
+        summary_chapter_interval: summaryInterval * 4,
       };
 
       const res = await apiFetch('/api/campaign/init', {
@@ -251,11 +352,11 @@ export default function CampaignCreator({ campaignId, initialFantasyDraft, onCom
             body: JSON.stringify({
               campaign_id: payload.campaign_id,
               host_character: {
-                name: protagonist.name,
-                gender: protagonist.gender || 'Unspecified',
-                location: protagonist.location,
-                appearance: protagonist.appearance || '',
-                description: protagonist.description || '',
+                name: effectiveProtagonist.name,
+                gender: effectiveProtagonist.gender || 'Unspecified',
+                location: effectiveProtagonist.location,
+                appearance: effectiveProtagonist.appearance || '',
+                description: effectiveProtagonist.description || '',
                 stats: payload.stats,
                 inventory,
               },
@@ -273,7 +374,7 @@ export default function CampaignCreator({ campaignId, initialFantasyDraft, onCom
             roomCode: session.room_code,
             joinUrl: session.join_url || buildLanJoinUrl(session.room_code, session.lan_ip),
             lanIp: session.lan_ip,
-            hostCharacterName: protagonist.name,
+            hostCharacterName: effectiveProtagonist.name,
           });
           return;
         }
@@ -310,6 +411,120 @@ export default function CampaignCreator({ campaignId, initialFantasyDraft, onCom
           </section>
         )}
 
+        {ollamaHealth?.ollama === 'unreachable' && (
+          <section className="bg-red-950/40 border border-red-700 rounded-xl p-4 text-sm text-red-100">
+            <div className="font-bold text-red-200">Ollama is not reachable.</div>
+            <div className="mt-1 text-red-100/80">Start Ollama and pull a model before beginning a new adventure.</div>
+            <pre className="mt-2 bg-fantasy-dark/70 rounded p-2 font-mono text-xs text-red-100">ollama pull llama3.1:8b-instruct</pre>
+            <button
+              onClick={refreshHealth}
+              disabled={healthChecking}
+              className="mt-3 bg-red-900/60 hover:bg-red-800 disabled:opacity-50 border border-red-700 rounded px-3 py-1.5 text-xs font-bold"
+            >
+              {healthChecking ? 'Checking...' : 'Retry'}
+            </button>
+          </section>
+        )}
+
+        <section className="bg-fantasy-panel/40 border border-slate-700/50 rounded-xl p-6 shadow-md backdrop-blur">
+          {!advancedOpen && (
+            <div className="mb-5">
+              <div className="flex items-center justify-between gap-3 mb-3">
+                <h2 className="text-xl font-serif text-amber-500">Choose a Template</h2>
+                {selectedTemplate && (
+                  <button
+                    onClick={clearTemplate}
+                    className="text-xs text-slate-400 hover:text-slate-200 border border-slate-700 hover:border-slate-500 rounded px-2 py-1"
+                  >
+                    Clear
+                  </button>
+                )}
+              </div>
+              <div className="flex gap-3 overflow-x-auto pb-2">
+                {worldTemplates.map(template => (
+                  <button
+                    key={template.id}
+                    onClick={() => applyTemplate(template)}
+                    className={`min-w-[190px] text-left border rounded-lg p-3 transition ${
+                      selectedTemplate === template.id
+                        ? 'bg-amber-950/40 border-amber-600 text-amber-100'
+                        : 'bg-fantasy-dark/60 border-slate-700 text-slate-300 hover:border-slate-500'
+                    }`}
+                  >
+                    <span className="block text-sm font-bold text-amber-400">{template.label}</span>
+                    <span className="block text-xs text-slate-400 mt-1 leading-snug">{template.description}</span>
+                  </button>
+                ))}
+              </div>
+            </div>
+          )}
+
+          <h2 className="text-xl font-serif text-amber-500 mb-4 border-b border-slate-700/50 pb-2">Quick Start</h2>
+          <div className="grid grid-cols-1 md:grid-cols-[1fr_260px] gap-4">
+            <label className="block">
+              <span className="block text-xs uppercase tracking-widest text-slate-400 mb-1">World Concept</span>
+              <textarea
+                value={worldPrompt}
+                onChange={e => {
+                  setWorldPrompt(e.target.value);
+                  setSelectedTemplate(null);
+                  setHasGenerated(false);
+                }}
+                placeholder="A city ruled by vampire corporations, a haunted monastery, a floating island of rogue mages..."
+                className="w-full bg-fantasy-dark border border-slate-600 rounded px-3 py-2 font-serif focus:border-fantasy-accent focus:outline-none text-sm min-h-[108px]"
+              />
+            </label>
+            <label className="block">
+              <span className="block text-xs uppercase tracking-widest text-slate-400 mb-1">Character Name</span>
+              <input
+                type="text"
+                value={protagonist.name}
+                onChange={e => setProtagonist({ ...protagonist, name: e.target.value })}
+                className="w-full bg-fantasy-dark border border-slate-600 rounded px-3 py-2 focus:border-fantasy-accent focus:outline-none text-sm"
+              />
+              <button
+                type="button"
+                onClick={toggleAdvanced}
+                className="mt-4 w-full text-left border border-slate-700 hover:border-amber-700 rounded px-3 py-2 text-sm text-slate-300 hover:text-amber-300 transition"
+              >
+                Advanced Setup {advancedOpen ? '▾' : '▸'}
+              </button>
+            </label>
+          </div>
+
+          {/* Inline model picker so users don't have to open Advanced just to switch from a default that isn't pulled. */}
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-3 mt-4">
+            <label className="block">
+              <span className="block text-xs uppercase tracking-widest text-slate-400 mb-1">Narrator Model (GM)</span>
+              <select
+                value={gmModel}
+                onChange={e => handleGmModelChange(e.target.value)}
+                className="w-full bg-fantasy-dark border border-slate-600 rounded px-3 py-2 focus:border-fantasy-accent focus:outline-none text-sm"
+              >
+                {availableModels.length === 0 && <option value="">(no models — start Ollama)</option>}
+                {availableModels.map(m => <option key={m} value={m}>{m}</option>)}
+              </select>
+            </label>
+            <label className="block">
+              <span className="flex items-center gap-2 mb-1">
+                <span className="block text-xs uppercase tracking-widest text-slate-400">Utility Model</span>
+                {utilityModel === '' && <span className="text-xs text-amber-400">auto</span>}
+              </span>
+              <select
+                value={utilityModel}
+                onChange={e => handleUtilityModelChange(e.target.value)}
+                className="w-full bg-fantasy-dark border border-slate-600 rounded px-3 py-2 focus:border-fantasy-accent focus:outline-none text-sm"
+              >
+                <option value="" className="text-amber-400">(auto — recommended)</option>
+                {availableModels.map(m => <option key={m} value={m}>{m}</option>)}
+              </select>
+            </label>
+          </div>
+        </section>
+
+        {advancedOpen && (
+          <>
+
         {/* Model configuration (A11) */}
         <section className="bg-fantasy-panel/40 border border-slate-700/50 rounded-xl p-6 shadow-md backdrop-blur">
           <h2 className="text-xl font-serif text-amber-500 mb-4 border-b border-slate-700/50 pb-2">Models</h2>
@@ -340,7 +555,10 @@ export default function CampaignCreator({ campaignId, initialFantasyDraft, onCom
               <p className="text-xs text-slate-500 mt-1 italic">The AI that writes your story. Larger models = richer narration.</p>
             </div>
             <div>
-              <label className="block text-xs uppercase tracking-widest text-slate-400 mb-1">Utility Model (summary + state extraction)</label>
+              <div className="flex items-center gap-2 mb-1">
+                <label className="block text-xs uppercase tracking-widest text-slate-400">Utility Model (summary + state extraction)</label>
+                {utilityModel === '' && <span className="text-xs text-amber-400">auto</span>}
+              </div>
               {availableModels.length > 4 && (
                 <input
                   type="text"
@@ -351,7 +569,7 @@ export default function CampaignCreator({ campaignId, initialFantasyDraft, onCom
                 />
               )}
               <select value={utilityModel} onChange={e=>handleUtilityModelChange(e.target.value)} className="w-full bg-fantasy-dark border border-slate-600 rounded px-3 py-2 focus:border-fantasy-accent focus:outline-none text-sm">
-                <option value="">(auto — falls back through llama3.1:8b → qwen2.5:7b → mistral)</option>
+                <option value="" className="text-amber-400">(auto — recommended)</option>
                 {availableModels
                   .filter(m => m.toLowerCase().includes(utilityFilter.toLowerCase()))
                   .map(m => <option key={m} value={m}>{m}</option>)}
@@ -377,25 +595,46 @@ export default function CampaignCreator({ campaignId, initialFantasyDraft, onCom
               </span>
             </span>
           </label>
+          <div className="mt-4 flex items-center gap-3 text-sm text-slate-300">
+            <label htmlFor="summaryInterval" className="flex-shrink-0">Summarize story every</label>
+            <select
+              id="summaryInterval"
+              value={summaryInterval}
+              onChange={e => setSummaryInterval(Number(e.target.value))}
+              className="bg-fantasy-dark border border-slate-600 rounded px-2 py-1 text-sm"
+            >
+              <option value={3}>3 turns</option>
+              <option value={5}>5 turns (default)</option>
+              <option value={10}>10 turns</option>
+              <option value={20}>20 turns</option>
+              <option value={9999}>Never</option>
+            </select>
+          </div>
         </section>
 
         {/* World Generation */}
         <section className="bg-fantasy-panel/40 border border-slate-700/50 rounded-xl p-6 shadow-md backdrop-blur">
            <h2 className="text-xl font-serif text-amber-500 mb-4 border-b border-slate-700/50 pb-2">Auto-Forge World (AI)</h2>
-           <div className="flex flex-col md:flex-row gap-3 items-start">
-             <textarea
-                value={worldPrompt}
-                onChange={e=>setWorldPrompt(e.target.value)}
-                placeholder="Describe your world... (e.g. 'A cyberpunk city ruled by vampire corporations', 'A floating island of rogue mages')"
-                className="flex-1 w-full bg-fantasy-dark border border-slate-600 rounded px-3 py-2 font-serif focus:border-fantasy-accent focus:outline-none text-sm min-h-[80px]"
-             />
+           <div className="flex flex-col md:flex-row gap-3 items-start md:items-center">
+             <div className="flex-1 text-sm text-slate-400">
+               Use the Quick Start concept above to generate detailed lore, cast, and a starting scene before beginning.
+             </div>
              <button
-                onClick={handleGenerateWorld}
+                onClick={() => handleGenerateWorld()}
                 disabled={isGenerating || !worldPrompt.trim()}
-                className="bg-indigo-700 hover:bg-indigo-600 text-white w-full md:w-auto px-6 py-2 rounded md:h-[80px] font-semibold transition disabled:opacity-50"
+                className="bg-indigo-700 hover:bg-indigo-600 text-white w-full md:w-auto px-6 py-2 rounded font-semibold transition disabled:opacity-50"
              >
                 {isGenerating ? 'Dreaming...' : 'Generate World'}
              </button>
+             {hasGenerated && (
+               <button
+                 onClick={() => handleGenerateWorld({ clearFirst: true })}
+                 disabled={isGenerating || !worldPrompt.trim()}
+                 className="bg-slate-800 hover:bg-slate-700 disabled:opacity-50 text-amber-300 border border-slate-600 w-full md:w-auto px-4 py-2 rounded font-semibold transition"
+               >
+                 Regenerate ↻
+               </button>
+             )}
            </div>
 
             <div className="mt-6 flex flex-col gap-4">
@@ -423,10 +662,6 @@ export default function CampaignCreator({ campaignId, initialFantasyDraft, onCom
         <section className="bg-fantasy-panel/40 border border-slate-700/50 rounded-xl p-6 shadow-md backdrop-blur">
            <h2 className="text-xl font-serif text-amber-500 mb-4 border-b border-slate-700/50 pb-2">1. The Protagonist</h2>
            <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-4">
-              <div className="md:col-span-2">
-                 <label className="block text-xs uppercase tracking-widest text-slate-400 mb-1">Name</label>
-                 <input type="text" value={protagonist.name} onChange={e=>setProtagonist({...protagonist, name: e.target.value})} className="w-full bg-fantasy-dark border border-slate-600 rounded px-3 py-2 focus:border-fantasy-accent focus:outline-none text-sm" />
-              </div>
               <div>
                  <label className="block text-xs uppercase tracking-widest text-slate-400 mb-1">Gender</label>
                  <select value={protagonist.gender} onChange={e=>setProtagonist({...protagonist, gender: e.target.value})} className="w-full bg-fantasy-dark border border-slate-600 rounded px-3 py-2 focus:border-fantasy-accent focus:outline-none text-sm">
@@ -469,8 +704,16 @@ export default function CampaignCreator({ campaignId, initialFantasyDraft, onCom
                  <div className="flex gap-2">
                     <input type="text" placeholder="e.g. Sanity" value={newStat.name} onChange={e=>setNewStat({...newStat, name: e.target.value})} className="w-24 bg-fantasy-dark border border-slate-600 rounded px-2 py-1 focus:outline-none text-sm" />
                     <input type="number" value={newStat.value} onChange={e=>setNewStat({...newStat, value: parseInt(e.target.value) || 0})} className="w-16 bg-fantasy-dark border border-slate-600 rounded px-2 py-1 focus:outline-none text-sm" />
-                    <button onClick={() => { if(newStat.name) setStats([...stats, newStat]); setNewStat({name:'', value: 10}); }} className="bg-slate-700 px-3 py-1 rounded text-sm hover:bg-slate-600">+</button>
+                    <button onClick={() => {
+                      if (!newStat.name.trim()) return;
+                      if (stats.some(s => s.name.toLowerCase() === newStat.name.trim().toLowerCase())) return;
+                      setStats([...stats, { ...newStat, name: newStat.name.trim() }]);
+                      setNewStat({ name: '', value: 10 });
+                    }} className="bg-slate-700 px-3 py-1 rounded text-sm hover:bg-slate-600">+</button>
                  </div>
+                 {newStat.name.trim() && stats.some(s => s.name.toLowerCase() === newStat.name.trim().toLowerCase()) && (
+                   <p className="text-red-400 text-xs mt-1">Stat name already exists.</p>
+                 )}
               </div>
 
               <div className="flex-1">
@@ -597,13 +840,16 @@ export default function CampaignCreator({ campaignId, initialFantasyDraft, onCom
               </button>
            </div>
         </section>
+          </>
+        )}
 
         <div className="flex justify-center mt-4 pb-12">
            <button
              onClick={handleStart}
-             className="bg-gradient-to-b from-fantasy-accent to-amber-700 hover:from-amber-600 hover:to-amber-800 text-white px-12 py-4 rounded-xl font-bold tracking-widest uppercase shadow-lg transition transform hover:scale-[1.02]"
+             disabled={isGenerating}
+             className="bg-gradient-to-b from-fantasy-accent to-amber-700 hover:from-amber-600 hover:to-amber-800 text-white px-12 py-4 rounded-xl font-bold tracking-widest uppercase shadow-lg transition transform hover:scale-[1.02] disabled:opacity-50 disabled:cursor-wait"
            >
-             {hostMultiplayer ? 'Host Multiplayer' : 'Begin Adventure'}
+             {isGenerating ? 'Dreaming up your world...' : hostMultiplayer ? 'Host Multiplayer' : 'Begin Adventure'}
            </button>
         </div>
 

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { Fragment, useCallback, useEffect, useRef, useState } from 'react';
 import CampaignCreator from './CampaignCreator';
 import PreferenceProfiles from './PreferenceProfiles';
 import { MultiplayerEntry } from './MultiplayerSession';
@@ -22,6 +22,15 @@ const initialAppMode = () => {
   }
 };
 
+const shouldShowLaunchHelp = () => {
+  if (typeof window === 'undefined') return false;
+  try {
+    return !window.localStorage?.getItem('tt_has_launched');
+  } catch {
+    return true;
+  }
+};
+
 const QUICK_ACTIONS = [
   { label: '⚔ Attack', text: 'I attack [target] with [weapon].' },
   { label: '🗣 Persuade', text: 'I attempt to persuade [character] to [goal].' },
@@ -30,6 +39,44 @@ const QUICK_ACTIONS = [
   { label: '💤 Rest', text: 'I take a short rest to catch my breath and recover.' },
   { label: '🎲 Roll', text: 'I roll to [skill/action].' },
 ];
+
+const rollOutcomeMeta = {
+  critical_success: { icon: '🎯', className: 'border-emerald-600/50 text-emerald-200' },
+  success: { icon: '✅', className: 'border-emerald-600/50 text-emerald-200' },
+  partial_success: { icon: '⚠️', className: 'border-amber-600/50 text-amber-200' },
+  failure: { icon: '❌', className: 'border-red-700/50 text-red-200' },
+  critical_failure: { icon: '💀', className: 'border-red-700/50 text-red-200' },
+};
+
+function formatDate(iso) {
+  if (!iso) return '';
+  const parsed = new Date(iso);
+  if (Number.isNaN(parsed.getTime())) return '';
+  return `Started ${parsed.toLocaleDateString(undefined, { year: 'numeric', month: 'short', day: 'numeric' })}`;
+}
+
+function extractPlaceholders(template) {
+  return [...new Set([...template.matchAll(/\[([^\]]+)\]/g)].map(match => match[1]))];
+}
+
+function resizeTextarea(element) {
+  if (!element) return;
+  element.style.height = 'auto';
+  const nextHeight = Math.min(element.scrollHeight, 160);
+  element.style.height = `${Math.max(nextHeight, 58)}px`;
+  element.style.overflowY = element.scrollHeight > 160 ? 'auto' : 'hidden';
+}
+
+function RollResultBadge({ resolution }) {
+  if (!resolution?.summary) return null;
+  const meta = rollOutcomeMeta[resolution.outcome] || { icon: '🎲', className: 'border-amber-600/40 text-amber-200' };
+  return (
+    <div className={`bg-slate-800 border rounded-lg px-4 py-2 text-sm font-sans italic shadow-md ${meta.className}`}>
+      <span className="mr-2 not-italic" aria-hidden="true">{meta.icon}</span>
+      {resolution.summary}
+    </div>
+  );
+}
 
 function AppInner() {
   const [appMode, setAppMode] = useState(initialAppMode);
@@ -51,9 +98,15 @@ function AppInner() {
   const [renameDraft, setRenameDraft] = useState('');
   const [pendingFantasyDraft, setPendingFantasyDraft] = useState(null);
   const [multiplayerLaunch, setMultiplayerLaunch] = useState(null);
-  const [helpOpen, setHelpOpen] = useState(false);
+  const [helpOpen, setHelpOpen] = useState(shouldShowLaunchHelp);
+  const [helpManagesLaunchPreference, setHelpManagesLaunchPreference] = useState(shouldShowLaunchHelp);
+  const [profilesOpen, setProfilesOpen] = useState(false);
+  const [preferenceProfiles, setPreferenceProfiles] = useState(null);
+  const [quickActionForm, setQuickActionForm] = useState(null);
+  const [quickActionValues, setQuickActionValues] = useState({});
+  const [lastRoomCard, setLastRoomCard] = useState(null);
   const [showQuickActions, setShowQuickActions] = useState(() => {
-    try { return window.localStorage?.getItem('tt_quick_actions') === 'true'; } catch { return false; }
+    try { return window.localStorage?.getItem('tt_quick_actions') !== 'false'; } catch { return true; }
   });
 
   const modal = useModal();
@@ -75,6 +128,8 @@ function AppInner() {
   // populate — avoids landing on the prologue when reopening a long story.
   const scrollAnchorRef = useRef(null);
   const initialScrolledCampaignRef = useRef(null);
+  const textareaRef = useRef(null);
+  const quickActionContainerRef = useRef(null);
 
   useEffect(() => {
     if (appMode !== 'play' || messages.length === 0) return;
@@ -86,11 +141,48 @@ function AppInner() {
     });
   }, [appMode, activeCampaignId, messages.length]);
 
+  // Auto-grow the textarea as user types; reset when input is cleared.
+  useEffect(() => {
+    if (!textareaRef.current) return;
+    resizeTextarea(textareaRef.current);
+  }, [input]);
+
   useEffect(() => {
     if (appMode !== 'play') {
       initialScrolledCampaignRef.current = null;
     }
   }, [appMode]);
+
+  useEffect(() => {
+    if (!quickActionForm) return;
+    const closeOnEscape = (e) => {
+      if (e.key === 'Escape') setQuickActionForm(null);
+    };
+    const closeOnOutsideClick = (e) => {
+      if (!quickActionContainerRef.current?.contains(e.target)) {
+        setQuickActionForm(null);
+      }
+    };
+    document.addEventListener('keydown', closeOnEscape);
+    document.addEventListener('mousedown', closeOnOutsideClick);
+    return () => {
+      document.removeEventListener('keydown', closeOnEscape);
+      document.removeEventListener('mousedown', closeOnOutsideClick);
+    };
+  }, [quickActionForm]);
+
+  // Story 7.1.3: Escape closes sidebar and prompt inspector.
+  // Defers to ModalProvider when a modal dialog is on-screen (it owns Escape there).
+  useEffect(() => {
+    const onEscape = (e) => {
+      if (e.key !== 'Escape') return;
+      if (document.querySelector('[role="dialog"][aria-modal="true"]')) return;
+      if (inspectorOpen) { setInspectorOpen(false); return; }
+      if (sidebarOpen) { setSidebarOpen(false); }
+    };
+    document.addEventListener('keydown', onEscape);
+    return () => document.removeEventListener('keydown', onEscape);
+  }, [inspectorOpen, sidebarOpen]);
 
   // -------------------------------------------------------- data access
 
@@ -110,9 +202,21 @@ function AppInner() {
   }, [banner]);
 
   const { isStreaming, streamEndpoint, stop: handleStop } = useNdjsonStream({
-    onError: banner.error,
+    onError: (msg, evt) => {
+      if (evt?.partial) {
+        banner.warn('The AI connection dropped mid-response. You can → Continue to extend it, or ↻ Reroll to try again.');
+      } else {
+        banner.error(msg);
+      }
+    },
     onAbortWithTokens: () => refreshState(activeCampaignId)
   });
+
+  // Keep the scroll anchor visible during streaming so new tokens stay on screen.
+  useEffect(() => {
+    if (!isStreaming) return;
+    scrollAnchorRef.current?.scrollIntoView({ block: 'end' });
+  }, [messages, isStreaming]);
 
   useEffect(() => {
     if (appMode === 'menu') {
@@ -120,6 +224,31 @@ function AppInner() {
         .then(r => r.json())
         .then(setSavedCampaigns)
         .catch(e => banner.error(`Could not list campaigns: ${describeApiError(e)}`));
+      apiFetch('/api/preference-profiles')
+        .then(r => (r.ok ? r.json() : []))
+        .then(setPreferenceProfiles)
+        .catch(() => setPreferenceProfiles(null));
+
+      // Check if the user has a recently-joined session they can rejoin.
+      try {
+        const lastRoom = window.localStorage?.getItem('tt_last_room');
+        const lastChar = window.localStorage?.getItem('tt_last_char');
+        const lastDisplay = window.localStorage?.getItem('tt_last_display');
+        if (lastRoom) {
+          apiFetch(`/api/session/${lastRoom}/exists`)
+            .then(r => (r.ok ? r.json() : null))
+            .then(data => {
+              if (data?.exists && data?.status !== 'archived') {
+                setLastRoomCard({ roomCode: lastRoom, characterName: lastChar || '', displayName: lastDisplay || '' });
+              } else {
+                setLastRoomCard(null);
+              }
+            })
+            .catch(() => setLastRoomCard(null));
+        } else {
+          window.setTimeout(() => setLastRoomCard(null), 0);
+        }
+      } catch { window.setTimeout(() => setLastRoomCard(null), 0); }
     }
   }, [appMode, banner]);
 
@@ -138,9 +267,9 @@ function AppInner() {
     });
   };
 
-  const handleSend = async () => {
-    if (isStreaming || !input.trim()) return;
-    const userText = input;
+  const handleSend = async (overrideText = null) => {
+    const userText = typeof overrideText === 'string' ? overrideText : input;
+    if (isStreaming || !userText.trim()) return;
     setInput('');
     setMessages(prev => [
       ...prev,
@@ -155,6 +284,7 @@ function AppInner() {
       onStart: (evt) => {
         setPromptStats(evt.stats);
         setLastResolution(evt.action_resolution || null);
+        if (evt.memory_warning) banner.warn('Memory store unavailable — this turn will not use past memories.');
       },
       onToken: (t) => setMessages(prev => {
         const copy = [...prev];
@@ -187,6 +317,15 @@ function AppInner() {
   const handleRegenerate = async () => {
     const lastGm = [...messages].reverse().find(m => m.role === 'assistant' && m.id && !m.id.startsWith('temp'));
     if (!lastGm) return;
+    if (lastGm.partial) {
+      const ok = await modal.confirm({
+        title: 'Discard partial response?',
+        message: 'Discard the current partial response and generate a new one?',
+        confirmLabel: 'Reroll',
+        danger: true,
+      });
+      if (!ok) return;
+    }
     setMessages(prev => {
       const copy = [...prev];
       copy.pop();
@@ -264,6 +403,17 @@ function AppInner() {
       setSavedCampaigns(await res.json());
     } catch (err) {
       banner.error(`Delete failed: ${describeApiError(err)}`);
+    }
+  };
+
+  const convertToSolo = async (id, e) => {
+    e.stopPropagation();
+    try {
+      const res = await apiFetch(`/api/campaigns/${id}/convert_to_solo`, { method: 'POST' });
+      if (!res.ok) { banner.error('Could not convert to solo'); return; }
+      await loadCampaign(id);
+    } catch (err) {
+      banner.error(`Convert failed: ${describeApiError(err)}`);
     }
   };
 
@@ -463,7 +613,13 @@ function AppInner() {
     return () => window.removeEventListener('keydown', onKey);
   });
 
-  const updateStat = (name, val) => pushStatePatch({ stats: { [name]: val } }, s => { s.player.stats[name] = val; }, `Edit ${name}`);
+  const updateStat = (name, val) => {
+    if (!Object.prototype.hasOwnProperty.call(campaignState?.player?.stats || {}, name)) {
+      banner.warn('Stat name is unavailable; refresh before editing stats.');
+      return;
+    }
+    pushStatePatch({ stats: { [name]: val } }, s => { s.player.stats[name] = val; }, `Edit ${name}`);
+  };
   const updateLocation = (loc) => pushStatePatch({ player: { location: loc } }, s => { s.player.location = loc; }, 'Edit location');
   const updatePlayerField = (field, val) => pushStatePatch({ player: { [field]: val } }, s => { s.player[field] = val; }, `Edit ${field}`);
   const addInventory = (item) => {
@@ -562,7 +718,42 @@ function AppInner() {
   const toggleQuickActions = () => {
     const next = !showQuickActions;
     setShowQuickActions(next);
-    try { window.localStorage?.setItem('tt_quick_actions', String(next)); } catch { /* storage unavailable */ }
+    if (!next) setQuickActionForm(null);
+    try {
+      if (next) window.localStorage?.removeItem('tt_quick_actions');
+      else window.localStorage?.setItem('tt_quick_actions', 'false');
+    } catch { /* storage unavailable */ }
+  };
+
+  const handleQuickActionClick = (action) => {
+    const placeholders = extractPlaceholders(action.text);
+    if (placeholders.length === 0) {
+      setInput(action.text);
+      setQuickActionForm(null);
+      return;
+    }
+    setQuickActionForm({ ...action, placeholders });
+    setQuickActionValues(Object.fromEntries(placeholders.map(placeholder => [placeholder, ''])));
+  };
+
+  const insertQuickAction = () => {
+    if (!quickActionForm) return;
+    const filled = quickActionForm.text.replace(/\[([^\]]+)\]/g, (match, placeholder) => {
+      const value = quickActionValues[placeholder]?.trim();
+      return value || match;
+    });
+    setInput(filled);
+    setQuickActionForm(null);
+  };
+
+  const openHelp = () => {
+    setHelpManagesLaunchPreference(false);
+    setHelpOpen(true);
+  };
+
+  const closeHelp = () => {
+    setHelpOpen(false);
+    setHelpManagesLaunchPreference(false);
   };
 
   // -------------------------------------------------------- inspector
@@ -590,10 +781,17 @@ function AppInner() {
         <h1 className="text-6xl text-fantasy-accent drop-shadow-md mb-12 border-b border-slate-700 pb-4">Tavern Tales Reborn</h1>
         <div className="bg-fantasy-panel/40 border border-slate-700/50 rounded-xl shadow-lg backdrop-blur p-8 w-full max-w-2xl text-center relative">
           <button
-            onClick={() => setHelpOpen(true)}
+            onClick={openHelp}
             title="Help & Documentation"
+            aria-label="Help & Documentation"
             className="absolute top-4 right-4 text-xs text-slate-400 hover:text-amber-400 border border-slate-600 hover:border-amber-600 rounded-full w-7 h-7 flex items-center justify-center transition font-sans font-bold"
           >?</button>
+          <button
+            onClick={openHelp}
+            className="absolute top-5 right-14 text-xs text-slate-400 hover:text-amber-400 underline-offset-4 hover:underline font-sans"
+          >
+            What is this?
+          </button>
 
           <button
             onClick={() => { setPendingFantasyDraft(null); setMultiplayerLaunch(null); setActiveCampaignId(createCampaignId()); setAppMode('setup'); }}
@@ -614,6 +812,18 @@ function AppInner() {
           )}
           {!pendingFantasyDraft && <div className="mb-4" />}
 
+          {savedCampaigns.length === 0 && preferenceProfiles?.length === 0 && (
+            <div className="mb-6 bg-indigo-950/30 border border-indigo-700/40 rounded-lg p-3 text-sm text-indigo-100 font-sans">
+              <span>Tip: Preference Profiles let you guide the story&apos;s tone and themes.</span>
+              <button
+                onClick={() => setAppMode('profiles')}
+                className="ml-2 text-amber-300 hover:text-amber-200 font-bold underline-offset-4 hover:underline"
+              >
+                Get Started →
+              </button>
+            </div>
+          )}
+
           <label className="block mb-8">
             <span className="text-xs uppercase tracking-widest text-slate-400 font-sans">Import Campaign (.json)</span>
             <input
@@ -623,6 +833,42 @@ function AppInner() {
               className="block mt-2 w-full text-xs text-slate-300 file:mr-2 file:py-1 file:px-3 file:rounded file:border-0 file:bg-slate-700 file:text-slate-200 hover:file:bg-slate-600"
             />
           </label>
+
+          {lastRoomCard && (
+            <div className="mb-4 flex items-center gap-3 bg-emerald-950/30 border border-emerald-700/50 rounded-lg px-4 py-3 text-sm font-sans">
+              <div className="flex-1 min-w-0">
+                <span className="text-emerald-300 font-bold">Rejoin Last Session</span>
+                <span className="text-slate-400 ml-2">Room: <span className="font-mono text-slate-200">{lastRoomCard.roomCode}</span></span>
+                {lastRoomCard.characterName && <span className="text-slate-400 ml-2">as <span className="text-slate-200">{lastRoomCard.characterName}</span></span>}
+              </div>
+              <button
+                onClick={() => {
+                  setMultiplayerLaunch({
+                    roomCode: lastRoomCard.roomCode,
+                    joinUrl: '',
+                    joinPayload: {
+                      displayName: lastRoomCard.displayName || lastRoomCard.characterName,
+                      characterName: lastRoomCard.characterName,
+                      desiredSlot: 'guest',
+                      preferenceProfile: null,
+                      preferenceSource: 'none',
+                    },
+                  });
+                  setAppMode('multiplayer');
+                }}
+                className="bg-emerald-700 hover:bg-emerald-600 text-white px-4 py-1.5 rounded font-bold text-xs transition"
+              >Rejoin</button>
+              <button
+                onClick={() => {
+                  try { window.localStorage?.removeItem('tt_last_room'); } catch { /* ok */ }
+                  setLastRoomCard(null);
+                }}
+                className="text-slate-500 hover:text-slate-300 text-lg leading-none ml-1"
+                title="Dismiss"
+                aria-label="Dismiss rejoin card"
+              >×</button>
+            </div>
+          )}
 
           <h3 className="text-sm uppercase text-slate-400 font-sans tracking-widest mb-4">Or Continue Journey</h3>
           {savedCampaigns.length === 0 && <p className="text-slate-500 italic text-sm">No saved campaigns found.</p>}
@@ -651,21 +897,27 @@ function AppInner() {
                 ) : (
                   <button onClick={() => loadCampaign(c.id)} className="flex-1 bg-fantasy-dark/50 hover:bg-slate-700 border border-slate-600 rounded p-4 text-left font-sans flex justify-between items-center transition">
                     <span className="text-amber-500 font-bold">{c.title?.trim() || `${c.player}'s Tale`}</span>
-                    <span className="text-xs text-slate-500">{c.id}</span>
+                    <span className="text-xs text-slate-500" title={c.id}>
+                      {formatDate(c.created_at)}
+                    </span>
                   </button>
                 )}
                 {renamingId !== c.id && (
                   <>
-                    <button onClick={(e) => beginRename(c, e)} className="bg-slate-800 hover:bg-slate-700 text-slate-300 border border-slate-600 rounded px-4 font-sans font-bold transition" title="Rename World">✎</button>
-                    <button onClick={(e) => hostCampaign(c, e)} className="bg-emerald-900/40 hover:bg-emerald-800 text-emerald-200 border border-emerald-800/50 rounded px-4 font-sans font-bold transition" title="Host Multiplayer">Host</button>
-                    <button onClick={(e) => deleteCampaign(c.id, e)} className="bg-red-900/40 hover:bg-red-800 text-red-200 border border-red-900/50 rounded px-4 font-sans font-bold transition" title="Delete World">✗</button>
+                    <button onClick={(e) => beginRename(c, e)} aria-label={`Rename ${c.title || c.player + "'s Tale"}`} className="bg-slate-800 hover:bg-slate-700 text-slate-300 border border-slate-600 rounded px-4 font-sans font-bold transition" title="Rename World">✎</button>
+                    {c.has_archived_multiplayer ? (
+                      <button onClick={(e) => convertToSolo(c.id, e)} className="bg-indigo-900/40 hover:bg-indigo-800 text-indigo-200 border border-indigo-800/50 rounded px-3 font-sans font-bold transition text-xs" title="Continue this story in single-player mode">Continue Solo</button>
+                    ) : (
+                      <button onClick={(e) => hostCampaign(c, e)} className="bg-emerald-900/40 hover:bg-emerald-800 text-emerald-200 border border-emerald-800/50 rounded px-4 font-sans font-bold transition" title="Host Multiplayer">Host</button>
+                    )}
+                    <button onClick={(e) => deleteCampaign(c.id, e)} aria-label={`Delete ${c.title || c.player + "'s Tale"}`} className="bg-red-900/40 hover:bg-red-800 text-red-200 border border-red-900/50 rounded px-4 font-sans font-bold transition" title="Delete World">✗</button>
                   </>
                 )}
               </div>
             ))}
           </div>
         </div>
-        {helpOpen && <HelpModal onClose={() => setHelpOpen(false)} />}
+        {helpOpen && <HelpModal onClose={closeHelp} manageLaunchPreference={helpManagesLaunchPreference} />}
       </div>
     );
   }
@@ -719,9 +971,9 @@ function AppInner() {
     />;
   }
 
-  const ctx = promptStats ? Math.round((promptStats.total_used / promptStats.model_context_window) * 100) : 0;
+  const ctx = promptStats?.model_context_window ? Math.round((promptStats.total_used / promptStats.model_context_window) * 100) : 0;
   const lastGmMsg = [...messages].reverse().find(m => m.role === 'assistant');
-  const canContinue = !isStreaming && lastGmMsg && (lastGmMsg.partial || !/[.!?…"'”]$/.test((lastGmMsg.content || '').trim()));
+  const canContinue = !isStreaming && lastGmMsg && (lastGmMsg.partial || !/[.!?…"'”’)\]]+$/.test((lastGmMsg.content || '').trim()));
 
   return (
     <div className="h-screen overflow-hidden flex text-fantasy-text bg-fantasy-dark">
@@ -731,8 +983,15 @@ function AppInner() {
           onClick={() => setSidebarOpen(false)}
         />
       )}
-      {/* Sidebar */}
-      <aside className={`${sidebarOpen ? 'fixed inset-y-0 left-0 z-30 flex' : 'hidden'} md:relative md:inset-auto md:z-auto w-72 bg-fantasy-panel border-r border-slate-700/50 p-4 md:flex flex-col gap-6 overflow-y-auto h-screen`}>
+      {/* Sidebar — left drawer on md+, bottom sheet on mobile */}
+      <aside className={`
+        ${sidebarOpen
+          ? 'fixed inset-x-0 bottom-0 z-30 flex max-h-[80vh] flex-col rounded-t-2xl md:rounded-none md:inset-y-0 md:left-0 md:right-auto md:max-h-none md:h-screen'
+          : 'hidden'}
+        md:relative md:inset-auto md:z-auto md:flex md:flex-col md:h-screen
+        w-full md:w-72 bg-fantasy-panel border-t md:border-t-0 border-r border-slate-700/50 p-4 gap-6 overflow-y-auto
+        transition-transform
+      `}>
         <div className="flex items-center justify-between gap-2">
           <h2 className="text-2xl font-serif text-fantasy-accent font-bold">Tavern Tales Reborn</h2>
           <button className="md:hidden text-xs border text-slate-300 border-slate-700 py-1 px-2 rounded" onClick={() => setSidebarOpen(false)}>Close</button>
@@ -745,15 +1004,22 @@ function AppInner() {
         {campaignState && (
           <>
             {campaignState.preference_context?.enabled && (
-              <div className="bg-emerald-950/20 border border-emerald-800/60 rounded p-3 text-xs text-emerald-100">
-                <h3 className="uppercase text-emerald-300 font-bold tracking-widest mb-2">Preference Context</h3>
+              <button
+                onClick={() => setProfilesOpen(true)}
+                className="bg-emerald-950/20 border border-emerald-800/60 rounded p-3 text-xs text-emerald-100 text-left w-full hover:bg-emerald-950/40 transition"
+                title="View or edit your preference profiles"
+              >
+                <h3 className="uppercase text-emerald-300 font-bold tracking-widest mb-1 flex items-center gap-1">
+                  <span className="inline-block w-1.5 h-1.5 rounded-full bg-emerald-400"></span>
+                  Preference Context — active
+                </h3>
                 <div className="text-emerald-200 font-semibold">{campaignState.preference_context.draft_title || 'Saved preference snapshot'}</div>
                 <div className="text-emerald-300/70 mt-1">
                   Profile {campaignState.preference_context.profile_version ? `v${campaignState.preference_context.profile_version}` : 'snapshot'}
                   {campaignState.preference_context.draft_id ? ` / ${campaignState.preference_context.draft_id}` : ''}
                 </div>
                 <div className="mt-2 text-emerald-200/80">{campaignState.preference_context.safety_principle}</div>
-              </div>
+              </button>
             )}
 
             <div>
@@ -821,7 +1087,7 @@ function AppInner() {
                       {campaignState.player?.inventory?.map((item, idx) => (
                         <span key={idx} className="bg-slate-800 border border-slate-600 rounded px-2 py-0.5 text-xs text-slate-300 flex items-center gap-1">
                           {item}
-                          {directorMode && <button onClick={() => removeInventory(item)} className="text-red-400 hover:text-red-300 ml-1">×</button>}
+                          {directorMode && <button onClick={() => removeInventory(item)} aria-label={`Remove ${item} from inventory`} className="text-red-400 hover:text-red-300 ml-1">×</button>}
                         </span>
                       ))}
                     </div>
@@ -905,7 +1171,7 @@ function AppInner() {
                         <>
                           <div className="flex gap-1 items-center mb-1">
                             <span className="text-amber-500 font-bold bg-slate-800 px-1.5 rounded">{k}</span>
-                            <button onClick={() => removeLore(k)} className="text-red-400 hover:text-red-300 ml-auto">×</button>
+                            <button onClick={() => removeLore(k)} aria-label={`Remove lorebook entry: ${k}`} className="text-red-400 hover:text-red-300 ml-auto">×</button>
                           </div>
                           <textarea className="w-full bg-slate-800 border border-slate-600 rounded p-1 text-xs text-slate-200" rows={2} value={v} onChange={e => updateLore(k, e.target.value)} />
                         </>
@@ -944,29 +1210,31 @@ function AppInner() {
       <main className="flex-1 flex flex-col h-screen relative">
         <header className="p-4 border-b border-slate-700/50 flex justify-between items-center bg-fantasy-panel/90 backdrop-blur sticky top-0 z-10 shadow-sm flex-wrap gap-2">
           <div className="flex items-center gap-2">
-            <button className="md:hidden text-xs px-3 py-1 bg-slate-700 hover:bg-slate-600 text-slate-200 border border-slate-600 rounded" onClick={() => setSidebarOpen(true)}>State</button>
             <h1 className="font-serif text-xl text-fantasy-accent drop-shadow-sm">The Story</h1>
           </div>
           <div className="flex items-center gap-3 flex-wrap">
             {promptStats && (
-              <div title="Token usage — green: fine, amber: getting full, red: near limit" className="flex items-center gap-2 text-xs text-slate-400 border-r border-slate-600 pr-3">
-                <div className="w-32 h-1.5 bg-slate-700 rounded overflow-hidden">
+              <div
+                title={`AI memory usage — green: plenty of room, amber: getting full, red: near limit. ${ctx}% full — ${promptStats.total_used.toLocaleString()} / ${promptStats.model_context_window.toLocaleString()} tokens`}
+                role="progressbar"
+                aria-valuenow={ctx}
+                aria-valuemin={0}
+                aria-valuemax={100}
+                aria-label="AI memory usage"
+                className="flex items-center gap-2 text-xs text-slate-400 border-r border-slate-600 pr-3"
+              >
+                <div className="w-24 h-1.5 bg-slate-700 rounded overflow-hidden">
                   <div className={`h-full ${ctx > 85 ? 'bg-red-500' : ctx > 65 ? 'bg-amber-500' : 'bg-emerald-500'}`} style={{ width: `${Math.min(ctx, 100)}%` }} />
                 </div>
-                <span className="font-mono">{promptStats.total_used.toLocaleString()} / {promptStats.model_context_window.toLocaleString()}</span>
+                <span className={`font-mono ${ctx > 85 ? 'text-red-400' : ctx > 65 ? 'text-amber-400' : ''}`}>{ctx}% full</span>
               </div>
             )}
-            {lastResolution && (
-              <div className="text-xs text-emerald-300 border border-emerald-700/60 bg-emerald-950/30 rounded px-2 py-1">
-                {lastResolution.summary}
-              </div>
-            )}
+            <button onClick={openInspector} title="View the full system prompt sent to the AI this turn" className="text-xs px-3 py-1 bg-slate-700 hover:bg-slate-600 text-slate-200 border border-slate-600 rounded">Inspect Prompt</button>
             {directorMode && (
               <>
-                <button onClick={openInspector} title="View the full system prompt sent to the AI this turn" className="text-xs px-3 py-1 bg-slate-700 hover:bg-slate-600 text-slate-200 border border-slate-600 rounded">Inspect Prompt</button>
                 <button onClick={handleDebugExport} title="Export a JSON snapshot of campaign state and memories" className="text-xs px-3 py-1 bg-slate-700 hover:bg-slate-600 text-slate-200 border border-slate-600 rounded">Debug Bundle</button>
                 <button onClick={handleUndo} disabled={undoStack.length === 0} title="Remove the last director edit and revert all side effects (Ctrl+Z)" className="text-xs px-3 py-1 bg-slate-700 hover:bg-slate-600 text-slate-200 border border-slate-600 rounded disabled:opacity-40">Undo ({undoStack.length})</button>
-                <button onClick={handleFork} title="Duplicate the story at this moment and start an alternate path" className="text-xs px-3 py-1 bg-amber-600/30 hover:bg-amber-600/50 text-amber-400 border border-amber-600/50 rounded">Fork Timeline</button>
+                <button onClick={handleFork} title="Branch the story at this moment and start an alternate path" className="text-xs px-3 py-1 bg-amber-600/30 hover:bg-amber-600/50 text-amber-400 border border-amber-600/50 rounded">Branch Story</button>
               </>
             )}
             <button
@@ -974,34 +1242,55 @@ function AppInner() {
               title={directorMode ? 'Exit the editor and return to normal play' : 'Open the editor to change NPCs, stats, and world details mid-story'}
               className={`text-sm px-4 py-1.5 rounded transition shadow-sm font-semibold border ${directorMode ? 'bg-amber-600/20 text-amber-500 border-amber-600/50' : 'bg-fantasy-dark text-slate-300 border-slate-600 hover:bg-slate-700'}`}
             >
-              {directorMode ? 'Exit Director Mode' : 'Director Mode'}
+              <span className="flex flex-col items-center leading-tight">
+                <span>{directorMode ? 'Exit Director Mode' : 'Director Mode'}</span>
+                <span className="text-xs text-slate-500 font-normal">edit world state</span>
+              </span>
             </button>
             <button
-              onClick={() => setHelpOpen(true)}
+              onClick={openHelp}
               title="Help & Documentation"
+              aria-label="Help & Documentation"
               className="text-xs px-3 py-1 bg-slate-700 hover:bg-slate-600 text-slate-200 border border-slate-600 rounded font-bold"
             >?</button>
           </div>
         </header>
 
-        <div className="flex-1 overflow-y-auto p-4 md:p-8 flex flex-col gap-6 scroll-smooth">
-          {messages.map((m, idx) => (
-            <div key={m.id || idx} className={`flex ${m.role === 'user' ? 'justify-end' : 'justify-start'} group relative`}>
-              {directorMode && m.id && !m.id.startsWith('temp') && (
-                <div className="absolute top-[-10px] right-2 bg-fantasy-panel border border-slate-600 rounded flex gap-1 p-1 opacity-0 group-hover:opacity-100 transition shadow-lg z-20">
-                  <button onClick={() => handleDeleteMessage(m.id)} className="text-red-400 hover:bg-slate-700 px-2 py-0.5 rounded text-xs">Delete</button>
+        <div className="flex-1 overflow-y-auto p-4 md:p-8 flex flex-col gap-6 scroll-smooth" aria-live="polite" aria-atomic="false">
+          {messages.map((m, idx) => {
+            const nextMessage = messages[idx + 1];
+            const showRollAfterUser = Boolean(
+              lastResolution &&
+              m.role === 'user' &&
+              nextMessage?.role === 'assistant' &&
+              lastGmMsg &&
+              nextMessage.id === lastGmMsg.id
+            );
+            return (
+              <Fragment key={m.id || idx}>
+                <div className={`flex ${m.role === 'user' ? 'justify-end' : 'justify-start'} group relative`}>
+                  {directorMode && m.id && !m.id.startsWith('temp') && (
+                    <div className="absolute top-[-10px] right-2 bg-fantasy-panel border border-slate-600 rounded flex gap-1 p-1 opacity-0 group-hover:opacity-100 transition shadow-lg z-20">
+                      <button onClick={() => handleDeleteMessage(m.id)} className="text-red-400 hover:bg-slate-700 px-2 py-0.5 rounded text-xs">Delete</button>
+                    </div>
+                  )}
+                  <div className={`max-w-[85%] rounded-xl p-6 font-serif text-[1.1rem] leading-relaxed shadow-md whitespace-pre-wrap ${
+                    m.role === 'user'
+                      ? 'bg-gradient-to-br from-fantasy-accent/20 to-fantasy-accent/10 border border-fantasy-accent/30 text-amber-50 rounded-br-sm'
+                      : 'bg-fantasy-panel border border-slate-700/50 text-slate-200 rounded-bl-sm drop-shadow-lg'
+                  }`}>
+                    {m.content}
+                    {m.partial && <span className="ml-2 text-xs text-amber-600 italic">(partial)</span>}
+                  </div>
                 </div>
-              )}
-              <div className={`max-w-[85%] rounded-xl p-6 font-serif text-[1.1rem] leading-relaxed shadow-md whitespace-pre-wrap ${
-                m.role === 'user'
-                  ? 'bg-gradient-to-br from-fantasy-accent/20 to-fantasy-accent/10 border border-fantasy-accent/30 text-amber-50 rounded-br-sm'
-                  : 'bg-fantasy-panel border border-slate-700/50 text-slate-200 rounded-bl-sm drop-shadow-lg'
-              }`}>
-                {m.content}
-                {m.partial && <span className="ml-2 text-xs text-amber-600 italic">(partial)</span>}
-              </div>
-            </div>
-          ))}
+                {showRollAfterUser && (
+                  <div className="flex justify-start -mt-3">
+                    <RollResultBadge resolution={lastResolution} />
+                  </div>
+                )}
+              </Fragment>
+            );
+          })}
           {isStreaming && <div className="text-sm text-amber-600/70 italic animate-pulse font-serif px-2">The storyteller is weaving the thread...</div>}
           {!isStreaming && lastGmMsg && lastGmMsg.id && !lastGmMsg.id.startsWith('temp') && (
             <div className="flex gap-2 text-xs">
@@ -1014,8 +1303,8 @@ function AppInner() {
           <div ref={scrollAnchorRef} aria-hidden="true" />
         </div>
 
-        <div className="p-4 bg-fantasy-panel border-t border-slate-700/50 shadow-[0_-4px_6px_-1px_rgba(0,0,0,0.1)]">
-          <div className="max-w-4xl mx-auto mb-2">
+        <div className="p-4 bg-fantasy-panel border-t border-slate-700/50 shadow-[0_-4px_6px_-1px_rgba(0,0,0,0.1)] sticky bottom-0 z-10">
+          <div className="max-w-4xl mx-auto mb-2" ref={quickActionContainerRef}>
             <button
               onClick={toggleQuickActions}
               title="Toggle action shortcut buttons"
@@ -1026,7 +1315,7 @@ function AppInner() {
                 {QUICK_ACTIONS.map(a => (
                   <button
                     key={a.label}
-                    onClick={() => setInput(a.text)}
+                    onClick={() => handleQuickActionClick(a)}
                     disabled={isStreaming}
                     title={`Pre-fill: "${a.text}"`}
                     className="text-xs bg-slate-800 border border-slate-600 hover:bg-slate-700 hover:border-fantasy-accent text-slate-300 px-3 py-1.5 rounded transition disabled:opacity-40"
@@ -1034,12 +1323,55 @@ function AppInner() {
                 ))}
               </div>
             )}
+            {quickActionForm && (
+              <div className="mt-3 bg-slate-900 border border-slate-700 rounded-lg p-3 shadow-xl font-sans">
+                <div className="text-xs uppercase tracking-widest text-slate-500 mb-2">{quickActionForm.label.replace(/^[^\s]+\s*/, '')}</div>
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                  {quickActionForm.placeholders.map(placeholder => (
+                    <label key={placeholder} className="text-xs text-slate-400">
+                      <span className="block mb-1 capitalize">{placeholder}</span>
+                      <input
+                        value={quickActionValues[placeholder] || ''}
+                        onChange={(e) => setQuickActionValues(v => ({ ...v, [placeholder]: e.target.value }))}
+                        className="w-full bg-fantasy-dark border border-slate-600 rounded px-2 py-1.5 text-sm text-slate-200 focus:outline-none focus:border-fantasy-accent"
+                        autoFocus={placeholder === quickActionForm.placeholders[0]}
+                      />
+                    </label>
+                  ))}
+                </div>
+                <div className="flex justify-end gap-2 mt-3">
+                  <button
+                    type="button"
+                    onClick={() => setQuickActionForm(null)}
+                    className="text-xs px-3 py-1 rounded border border-slate-700 text-slate-400 hover:text-slate-200 hover:bg-slate-800"
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    type="button"
+                    onClick={insertQuickAction}
+                    className="text-xs px-3 py-1 rounded bg-fantasy-accent hover:bg-amber-600 text-white font-bold"
+                  >
+                    Insert
+                  </button>
+                </div>
+              </div>
+            )}
+            <button
+              type="button"
+              onClick={() => handleSend('I observe and wait, taking no action this turn.')}
+              disabled={isStreaming}
+              className="mt-2 text-xs text-slate-400 border border-slate-700 hover:border-slate-500 hover:text-slate-200 rounded px-2 py-1 disabled:opacity-40 disabled:cursor-not-allowed"
+            >
+              Pass Turn
+            </button>
           </div>
           <div className="max-w-4xl mx-auto flex gap-3">
             <textarea
-              rows={1}
+              ref={textareaRef}
               value={input}
               onChange={e => setInput(e.target.value)}
+              onInput={e => resizeTextarea(e.currentTarget)}
               onKeyDown={e => {
                 if (e.key === 'Enter' && !e.shiftKey) {
                   e.preventDefault();
@@ -1048,7 +1380,8 @@ function AppInner() {
               }}
               disabled={isStreaming}
               placeholder="Describe your next action..."
-              className="flex-1 min-h-[58px] max-h-40 resize-y bg-fantasy-dark border border-slate-600 rounded-lg px-5 py-4 focus:outline-none focus:border-fantasy-accent text-fantasy-text focus:ring-2 focus:ring-fantasy-accent/50 transition shadow-inner placeholder:text-slate-500 font-serif text-lg"
+              style={{ height: '58px', overflow: 'hidden' }}
+              className="flex-1 min-h-[58px] max-h-40 overflow-hidden resize-none bg-fantasy-dark border border-slate-600 rounded-lg px-5 py-4 focus:outline-none focus:border-fantasy-accent text-fantasy-text focus:ring-2 focus:ring-fantasy-accent/50 transition shadow-inner placeholder:text-slate-500 font-serif text-lg"
             />
             {isStreaming ? (
               <button
@@ -1060,13 +1393,29 @@ function AppInner() {
                 onClick={handleSend}
                 disabled={!input.trim()}
                 className="bg-gradient-to-b from-fantasy-accent to-amber-700 hover:from-amber-600 hover:to-amber-800 text-white px-8 py-4 rounded-lg font-bold tracking-wide transition shadow-md disabled:opacity-50 disabled:cursor-not-allowed uppercase text-sm"
-              >Commit</button>
+              >Send</button>
             )}
           </div>
         </div>
       </main>
 
-      {helpOpen && <HelpModal onClose={() => setHelpOpen(false)} />}
+      {/* Mobile FAB for sidebar — hidden on md+ since sidebar is always visible.
+          Positioned on the left to avoid overlapping the Send button on the right. */}
+      <button
+        className="md:hidden fixed bottom-28 left-4 z-20 bg-fantasy-accent hover:bg-amber-700 text-white rounded-full w-12 h-12 shadow-lg flex items-center justify-center text-xl font-bold"
+        onClick={() => setSidebarOpen(true)}
+        aria-label="Open character state panel"
+      >☰</button>
+
+      {helpOpen && <HelpModal onClose={closeHelp} manageLaunchPreference={helpManagesLaunchPreference} />}
+
+      {profilesOpen && (
+        <div className="fixed inset-0 z-50 bg-black/80 backdrop-blur-sm" onClick={() => setProfilesOpen(false)}>
+          <div className="h-full overflow-y-auto" onClick={e => e.stopPropagation()}>
+            <PreferenceProfiles onBack={() => setProfilesOpen(false)} />
+          </div>
+        </div>
+      )}
 
       {/* Prompt inspector modal */}
       {inspectorOpen && lastPrompt && (
@@ -1074,7 +1423,7 @@ function AppInner() {
           <div className="bg-fantasy-panel border border-slate-600 rounded-lg shadow-2xl max-w-3xl w-full max-h-[85vh] overflow-hidden flex flex-col" onClick={e => e.stopPropagation()}>
             <div className="p-4 border-b border-slate-700 flex justify-between items-center">
               <h2 className="font-serif text-lg text-fantasy-accent">Last Prompt (Inspector)</h2>
-              <button onClick={() => setInspectorOpen(false)} className="text-slate-400 hover:text-slate-200">✗</button>
+              <button onClick={() => setInspectorOpen(false)} aria-label="Close prompt inspector" className="text-slate-400 hover:text-slate-200">✗</button>
             </div>
             <div className="p-4 overflow-y-auto flex-1">
               <div className="mb-3 text-xs text-slate-400 font-mono">

@@ -6,7 +6,7 @@ import pytest
 
 import session_manager
 import state_manager
-from schema import MultiplayerConfig, PlayerCharacter, PlayerSlot, SessionStatus
+from schema import Message, MultiplayerConfig, PlayerCharacter, PlayerSlot, Role, SessionStatus
 
 
 class FakeWebSocket:
@@ -53,6 +53,10 @@ async def test_create_join_ready_and_submit_flow(temp_state_dir, new_state):
     await session_manager.set_ready(rt.room_code, PlayerSlot.HOST, True)
     rt = await session_manager.set_ready(rt.room_code, PlayerSlot.GUEST, True)
     assert rt.status == SessionStatus.HOST_TURN
+    assert rt.kickoff_needed is True
+    assert await session_manager.begin_kickoff_if_needed(rt.room_code) is rt
+    rt = await session_manager.finish_kickoff(rt.room_code)
+    assert rt is not None
 
     with pytest.raises(ValueError, match="not your turn"):
         await session_manager.submit_action(rt.room_code, PlayerSlot.GUEST, "I go first.")
@@ -96,6 +100,8 @@ async def test_disconnect_pauses_and_reconnect_restores(temp_state_dir, new_stat
     await session_manager.set_ready(rt.room_code, PlayerSlot.HOST, True)
     rt = await session_manager.set_ready(rt.room_code, PlayerSlot.GUEST, True)
     assert rt.status == SessionStatus.HOST_TURN
+    await session_manager.begin_kickoff_if_needed(rt.room_code)
+    await session_manager.finish_kickoff(rt.room_code)
 
     rt = await session_manager.mark_disconnected(rt.room_code, PlayerSlot.GUEST)
     assert rt is not None
@@ -240,6 +246,8 @@ async def test_paused_session_with_connected_players_recovers_turn_state(temp_st
     )
     await session_manager.set_ready(rt.room_code, PlayerSlot.HOST, True)
     rt = await session_manager.set_ready(rt.room_code, PlayerSlot.GUEST, True)
+    await session_manager.begin_kickoff_if_needed(rt.room_code)
+    await session_manager.finish_kickoff(rt.room_code)
 
     rt.status = SessionStatus.PAUSED
     rt.paused_status_before = None
@@ -258,3 +266,86 @@ async def test_paused_session_with_connected_players_recovers_turn_state(temp_st
     assert rt.players[PlayerSlot.HOST].is_connected is True
     assert rt.players[PlayerSlot.GUEST].is_connected is True
     assert rt.status == SessionStatus.GUEST_TURN
+
+
+@pytest.mark.asyncio
+async def test_ready_marks_kickoff_needed_only_when_no_kickoff_exists(temp_state_dir, new_state):
+    state = new_state("camp_kickoff_flag", player_name="Host Hero")
+    state.messages.append(Message(
+        role=Role.ASSISTANT,
+        content="The shared opening already happened.",
+        is_kickoff=True,
+    ))
+    await state_manager.save_state(state)
+
+    rt = await session_manager.create_session("camp_kickoff_flag", _host_character())
+    await session_manager.join_session(
+        rt.room_code,
+        websocket=FakeWebSocket(),
+        display_name="Host",
+        character_name="Host Hero",
+    )
+    await session_manager.join_session(
+        rt.room_code,
+        websocket=FakeWebSocket(),
+        display_name="Guest",
+        character_name="Guest Hero",
+    )
+    await session_manager.set_ready(rt.room_code, PlayerSlot.HOST, True)
+    rt = await session_manager.set_ready(rt.room_code, PlayerSlot.GUEST, True)
+
+    assert rt.status == SessionStatus.HOST_TURN
+    assert rt.kickoff_needed is False
+    assert await session_manager.begin_kickoff_if_needed(rt.room_code) is None
+
+
+@pytest.mark.asyncio
+async def test_ready_uses_configured_starting_slot(temp_state_dir, new_state):
+    await state_manager.save_state(new_state("camp_start_guest", player_name="Host Hero"))
+    rt = await session_manager.create_session("camp_start_guest", _host_character())
+    await session_manager.join_session(
+        rt.room_code,
+        websocket=FakeWebSocket(),
+        display_name="Host",
+        character_name="Host Hero",
+    )
+    await session_manager.join_session(
+        rt.room_code,
+        websocket=FakeWebSocket(),
+        display_name="Guest",
+        character_name="Guest Hero",
+    )
+
+    rt = await session_manager.set_starting_slot(rt.room_code, PlayerSlot.GUEST)
+    state = await state_manager.load_state("camp_start_guest")
+    assert state.multiplayer.starting_slot_this_round == PlayerSlot.GUEST
+
+    await session_manager.set_ready(rt.room_code, PlayerSlot.HOST, True)
+    rt = await session_manager.set_ready(rt.room_code, PlayerSlot.GUEST, True)
+
+    assert rt.starting_slot_this_round == PlayerSlot.GUEST
+    assert rt.status == SessionStatus.GUEST_TURN
+    assert rt.public_state()["active_slot"] == "guest"
+
+
+@pytest.mark.asyncio
+async def test_ooc_log_persists_reads_and_delete_removes_file(temp_state_dir, new_state):
+    await state_manager.save_state(new_state("camp_ooc_log", player_name="Host Hero"))
+    rt = await session_manager.create_session("camp_ooc_log", _host_character())
+    ts = "2026-04-30T12:00:00+00:00"
+
+    entry = await session_manager.append_ooc(
+        rt.room_code,
+        PlayerSlot.HOST,
+        "Host",
+        "Planning break in five minutes.",
+        ts,
+    )
+    log_path = session_manager.SESSIONS_DIR / f"{rt.room_code}_ooc.jsonl"
+
+    assert log_path.exists()
+    assert await session_manager.read_ooc_log(rt.room_code) == [entry]
+    assert await session_manager.read_ooc_log(rt.room_code, limit=0) == []
+
+    assert await session_manager.delete_session(rt.room_code) is True
+    assert not log_path.exists()

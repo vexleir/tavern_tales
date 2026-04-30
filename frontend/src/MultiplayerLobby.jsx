@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 
 /**
  * Lobby screen for a multiplayer session.
@@ -18,6 +18,7 @@ export default function MultiplayerLobby({
   mergedPreferenceSummary,
   onReady,
   onUnready,
+  onSetStartingSlot,
   onUpdateCharacter,
   onArchive,
   onDelete,
@@ -34,6 +35,8 @@ export default function MultiplayerLobby({
   const partnerCharacter = mySlot === 'host'
     ? multiplayer?.guest_character
     : multiplayer?.host_character;
+  const myTitle = myCharacter?.name ? `You - ${myCharacter.name}` : 'You';
+  const partnerTitle = partnerCharacter?.name || partnerPlayer?.display_name || 'Partner';
 
   // The form is initialized from the current character once. After that,
   // local edits are canonical until the player clicks Save. Server-side
@@ -53,6 +56,7 @@ export default function MultiplayerLobby({
 
   const canReady = bothJoined && Boolean(draft.name.trim());
   const isReady = Boolean(myPlayer?.is_ready);
+  const startingSlot = sessionState?.starting_slot_this_round || 'host';
 
   const handleSaveCharacter = () => {
     onUpdateCharacter({
@@ -97,7 +101,7 @@ export default function MultiplayerLobby({
 
         <div className="grid md:grid-cols-2 gap-4 mb-6">
           <CharacterCard
-            title={mySlot === 'host' ? 'You (Host)' : 'You (Guest)'}
+            title={myTitle}
             isYou
             player={myPlayer}
             character={myCharacter}
@@ -107,7 +111,7 @@ export default function MultiplayerLobby({
             onSave={handleSaveCharacter}
           />
           <CharacterCard
-            title={partnerSlot === 'host' ? 'Host' : 'Guest'}
+            title={partnerTitle}
             isYou={false}
             player={partnerPlayer}
             character={partnerCharacter}
@@ -116,6 +120,13 @@ export default function MultiplayerLobby({
         </div>
 
         <PreferenceSummaryPanel summary={mergedPreferenceSummary} />
+
+        {mySlot === 'host' && (
+          <StartingSlotControl
+            value={startingSlot}
+            onChange={onSetStartingSlot}
+          />
+        )}
 
         <div className="mt-6 flex flex-wrap items-center justify-between gap-4 bg-fantasy-panel/30 border border-slate-700/40 rounded p-4">
           <div className="text-sm font-sans text-slate-300">
@@ -157,19 +168,65 @@ export default function MultiplayerLobby({
   );
 }
 
+function StartingSlotControl({ value, onChange }) {
+  return (
+    <fieldset className="mt-6 bg-fantasy-panel/30 border border-slate-700/40 rounded p-4 font-sans text-sm">
+      <legend className="text-xs uppercase tracking-widest text-slate-400 mb-2">Who goes first?</legend>
+      <div className="flex flex-wrap gap-3">
+        {['host', 'guest'].map((slot) => (
+          <label key={slot} className="inline-flex items-center gap-2 text-slate-200">
+            <input
+              type="radio"
+              name="starting-slot"
+              value={slot}
+              checked={value === slot}
+              onChange={() => onChange(slot)}
+              className="accent-amber-500"
+            />
+            <span>{slot === 'host' ? 'Host' : 'Guest'}</span>
+          </label>
+        ))}
+      </div>
+    </fieldset>
+  );
+}
+
 function CharacterCard({ title, isYou, player, character, editable, draft, setDraft, onSave }) {
   const status = player ? (player.is_connected ? 'connected' : 'disconnected') : 'empty';
+  const [savedBadge, setSavedBadge] = useState(false);
+  const saveTimerRef = useRef(null);
+  const savedTimerRef = useRef(null);
+
+  useEffect(() => () => {
+    if (saveTimerRef.current) window.clearTimeout(saveTimerRef.current);
+    if (savedTimerRef.current) window.clearTimeout(savedTimerRef.current);
+  }, []);
+
+  const scheduleSave = () => {
+    if (!editable || !onSave) return;
+    if (saveTimerRef.current) window.clearTimeout(saveTimerRef.current);
+    saveTimerRef.current = window.setTimeout(() => {
+      onSave();
+      setSavedBadge(true);
+      if (savedTimerRef.current) window.clearTimeout(savedTimerRef.current);
+      savedTimerRef.current = window.setTimeout(() => setSavedBadge(false), 2000);
+    }, 1000);
+  };
+
   return (
     <div className={`rounded-xl border p-4 ${isYou ? 'border-amber-700/50 bg-fantasy-panel/40' : 'border-slate-700/50 bg-fantasy-panel/20'}`}>
       <div className="flex justify-between items-baseline mb-2">
         <h2 className="text-lg text-amber-300 font-sans">{title}</h2>
-        <span className={`text-xs font-sans uppercase tracking-widest ${
-          status === 'connected' ? 'text-emerald-400' :
-          status === 'disconnected' ? 'text-red-400' : 'text-slate-500'
-        }`}>
-          {status === 'empty' ? 'Not joined' : status}
-          {player?.is_ready ? ' · ready' : ''}
-        </span>
+        <div className="flex items-center gap-2">
+          {savedBadge && <span className="text-xs text-emerald-400 font-sans">&#10003; Saved</span>}
+          <span className={`text-xs font-sans uppercase tracking-widest ${
+            status === 'connected' ? 'text-emerald-400' :
+            status === 'disconnected' ? 'text-red-400' : 'text-slate-500'
+          }`}>
+            {status === 'empty' ? 'Not joined' : status}
+            {player?.is_ready ? ' · ready' : ''}
+          </span>
+        </div>
       </div>
 
       {!editable && (
@@ -184,22 +241,18 @@ function CharacterCard({ title, isYou, player, character, editable, draft, setDr
 
       {editable && (
         <div className="space-y-2 font-sans text-sm">
-          <LabeledInput label="Name" value={draft.name} onChange={(v) => setDraft({ ...draft, name: v })} maxLength={80} />
-          <LabeledInput label="Gender" value={draft.gender} onChange={(v) => setDraft({ ...draft, gender: v })} maxLength={40} />
-          <LabeledInput label="Location" value={draft.location} onChange={(v) => setDraft({ ...draft, location: v })} maxLength={200} />
-          <LabeledTextarea label="Appearance" value={draft.appearance} onChange={(v) => setDraft({ ...draft, appearance: v })} maxLength={600} rows={2} />
-          <LabeledTextarea label="Description" value={draft.description} onChange={(v) => setDraft({ ...draft, description: v })} maxLength={1200} rows={3} />
-          <button
-            onClick={onSave}
-            className="bg-indigo-700 hover:bg-indigo-600 text-white px-3 py-1 rounded text-xs font-bold uppercase tracking-widest"
-          >Save Character</button>
+          <LabeledInput label="Name" value={draft.name} onChange={(v) => setDraft({ ...draft, name: v })} onBlur={scheduleSave} maxLength={80} />
+          <LabeledInput label="Gender" value={draft.gender} onChange={(v) => setDraft({ ...draft, gender: v })} onBlur={scheduleSave} maxLength={40} />
+          <LabeledInput label="Location" value={draft.location} onChange={(v) => setDraft({ ...draft, location: v })} onBlur={scheduleSave} maxLength={200} />
+          <LabeledTextarea label="Appearance" value={draft.appearance} onChange={(v) => setDraft({ ...draft, appearance: v })} onBlur={scheduleSave} maxLength={600} rows={2} />
+          <LabeledTextarea label="Description" value={draft.description} onChange={(v) => setDraft({ ...draft, description: v })} onBlur={scheduleSave} maxLength={1200} rows={3} />
         </div>
       )}
     </div>
   );
 }
 
-function LabeledInput({ label, value, onChange, maxLength }) {
+function LabeledInput({ label, value, onChange, onBlur, maxLength }) {
   return (
     <label className="block">
       <span className="text-xs uppercase text-slate-400 tracking-widest">{label}</span>
@@ -208,13 +261,14 @@ function LabeledInput({ label, value, onChange, maxLength }) {
         value={value || ''}
         maxLength={maxLength}
         onChange={(e) => onChange(e.target.value)}
+        onBlur={onBlur}
         className="block w-full bg-slate-900 border border-slate-700 rounded px-2 py-1 text-amber-100"
       />
     </label>
   );
 }
 
-function LabeledTextarea({ label, value, onChange, maxLength, rows }) {
+function LabeledTextarea({ label, value, onChange, onBlur, maxLength, rows }) {
   return (
     <label className="block">
       <span className="text-xs uppercase text-slate-400 tracking-widest">{label}</span>
@@ -223,6 +277,7 @@ function LabeledTextarea({ label, value, onChange, maxLength, rows }) {
         maxLength={maxLength}
         rows={rows}
         onChange={(e) => onChange(e.target.value)}
+        onBlur={onBlur}
         className="block w-full bg-slate-900 border border-slate-700 rounded px-2 py-1 text-amber-100 resize-y"
       />
     </label>

@@ -27,7 +27,13 @@ class RateLimiter:
         while bucket and bucket[0] < cutoff:
             bucket.popleft()
         if len(bucket) >= self.rate:
-            raise HTTPException(429, "Rate limit exceeded — slow down.")
+            # Compute how many seconds until the oldest request ages out.
+            retry_after = max(1, int(self.per - (now - bucket[0])) + 1)
+            raise HTTPException(
+                429,
+                f"Too many requests — please wait {retry_after} seconds and try again.",
+                headers={"Retry-After": str(retry_after)},
+            )
         bucket.append(now)
 
 

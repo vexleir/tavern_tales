@@ -78,9 +78,10 @@ async def _update_short(state: CampaignState, utility_model: str) -> None:
 
 
 async def _rollup_chapter(state: CampaignState, utility_model: str) -> None:
+    chapter_interval = getattr(state.rules, "summary_chapter_interval", CHAPTER_ROLLUP_EVERY)
     since = state.summaries.last_chapter_rollup_turn
     end = _assistant_turn_count(state)
-    if end - since < CHAPTER_ROLLUP_EVERY:
+    if end - since < chapter_interval:
         return
 
     window_text = _render_window(state, since)
@@ -133,11 +134,13 @@ async def maybe_summarize(state: CampaignState) -> CampaignState:
     utility_model = await resolve_utility_model(state.models.utility, state.models.gm)
 
     try:
+        short_interval = getattr(state.rules, "summary_short_interval", SHORT_UPDATE_EVERY)
+        chapter_interval = getattr(state.rules, "summary_chapter_interval", CHAPTER_ROLLUP_EVERY)
         since_short = turns - state.summaries.last_short_update_turn
-        if since_short >= SHORT_UPDATE_EVERY:
+        if since_short >= short_interval:
             await _update_short(state, utility_model)
 
-        if turns - state.summaries.last_chapter_rollup_turn >= CHAPTER_ROLLUP_EVERY:
+        if turns - state.summaries.last_chapter_rollup_turn >= chapter_interval:
             await _rollup_chapter(state, utility_model)
 
         if len(state.summaries.chapters) > MAX_CHAPTERS_BEFORE_ARC:

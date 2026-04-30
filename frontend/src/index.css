@@ -6,4 +6,8 @@
   body {
     @apply bg-fantasy-dark text-fantasy-text font-sans antialiased;
   }
+
+  button:focus-visible {
+    @apply outline-none ring-2 ring-amber-500/70;
+  }
 }

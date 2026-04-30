@@ -24,6 +24,7 @@ Turn flow (sequential):
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import secrets
 import time
@@ -54,6 +55,8 @@ SESSION_PAUSE_ARCHIVE_SECONDS = 86_400  # 24h paused → eligible for cleanup
 MAX_OOC_MESSAGE_LEN = 1000
 MAX_ACTION_TEXT_LEN = 4000
 MAX_PROFILE_JSON_BYTES = 100_000  # 100 KB cap on imported preference JSON
+MAX_CHARACTER_STATS = 50
+MAX_CHARACTER_INVENTORY = 100
 
 _BACKEND_DIR = Path(__file__).resolve().parent
 SESSIONS_DIR = _BACKEND_DIR / "sessions"
@@ -112,6 +115,8 @@ class SessionRuntime:
 
     players: dict[PlayerSlot, ConnectedPlayer] = field(default_factory=dict)
     pending_actions: dict[PlayerSlot, PendingAction] = field(default_factory=dict)
+    kickoff_needed: bool = False
+    kickoff_in_progress: bool = False
 
     # In-memory only — never serialized.
     connections: dict[PlayerSlot, WebSocket] = field(default_factory=dict)
@@ -130,6 +135,8 @@ class SessionRuntime:
             "active_slot": self._active_slot_value(),
             "players": {slot.value: p.to_public() for slot, p in self.players.items()},
             "pending_actions": {slot.value: pa.to_public() for slot, pa in self.pending_actions.items()},
+            "kickoff_needed": self.kickoff_needed,
+            "kickoff_in_progress": self.kickoff_in_progress,
             "paused_since": self.paused_since.isoformat() if self.paused_since else None,
             "reconnect_window_seconds": self.reconnect_window_seconds,
             "last_activity": self.last_activity.isoformat(),
@@ -150,6 +157,7 @@ class SessionRuntime:
 
 _sessions: dict[str, SessionRuntime] = {}
 _sessions_guard = asyncio.Lock()
+_ooc_log_guard = asyncio.Lock()
 
 
 # ---------------------------------------------------------------------------
@@ -180,6 +188,22 @@ async def initialize() -> None:
         # Sessions always come back paused on restart — connections are gone.
         runtime.status = SessionStatus.PAUSED
         runtime.paused_status_before = state.multiplayer.session_status
+        # If the server crashed mid-generation, GENERATING is not a valid
+        # resume state. Derive the correct next-turn slot instead.
+        if runtime.paused_status_before == SessionStatus.GENERATING:
+            next_slot = (
+                PlayerSlot.GUEST
+                if state.multiplayer.starting_slot_this_round == PlayerSlot.HOST
+                else PlayerSlot.HOST
+            )
+            runtime.paused_status_before = (
+                SessionStatus.HOST_TURN if next_slot == PlayerSlot.HOST else SessionStatus.GUEST_TURN
+            )
+            log.info(
+                "Corrected GENERATING->pause for session %s to %s",
+                runtime.room_code,
+                runtime.paused_status_before,
+            )
         runtime.paused_since = datetime.now(timezone.utc)
         async with _sessions_guard:
             _sessions[runtime.room_code] = runtime
@@ -224,6 +248,10 @@ def _runtime_from_campaign(state: CampaignState) -> SessionRuntime:
 
 def _generate_room_code() -> str:
     return "".join(secrets.choice(ROOM_CODE_ALPHABET) for _ in range(ROOM_CODE_LEN))
+
+
+def _ooc_log_path(room_code: str) -> Path:
+    return SESSIONS_DIR / f"{(room_code or '').strip().upper()}_ooc.jsonl"
 
 
 async def _unique_room_code() -> str:
@@ -446,11 +474,16 @@ async def update_character(
     appearance: str | None = None,
     description: str | None = None,
     location: str | None = None,
+    stats: dict[str, Any] | None = None,
+    inventory: list[Any] | None = None,
 ) -> SessionRuntime:
     """Update a lobby character card for either player slot."""
     rt = await get_session(room_code)
     if rt is None:
         raise ValueError("session not found")
+
+    cleaned_stats = _clean_character_stats(stats) if stats is not None else None
+    cleaned_inventory = _clean_character_inventory(inventory) if inventory is not None else None
 
     async def _apply(st: CampaignState) -> CampaignState:
         if st.multiplayer is None:
@@ -473,6 +506,10 @@ async def update_character(
             char.description = description.strip()[:1200]
         if location is not None:
             char.location = location.strip()[:200]
+        if cleaned_stats is not None:
+            char.stats = cleaned_stats
+        if cleaned_inventory is not None:
+            char.inventory = cleaned_inventory
         return st
 
     new_state = await state_manager.mutate_state(rt.campaign_id, _apply)
@@ -485,6 +522,32 @@ async def update_character(
             player.character_name = name.strip()[:80] or player.character_name
         rt.touch()
     return rt
+
+
+def _clean_character_stats(stats: dict[str, Any]) -> dict[str, int]:
+    if not isinstance(stats, dict):
+        raise ValueError("stats must be an object")
+    cleaned: dict[str, int] = {}
+    for raw_key, raw_value in list(stats.items())[:MAX_CHARACTER_STATS]:
+        key = str(raw_key).strip()[:80]
+        if not key:
+            continue
+        try:
+            cleaned[key] = int(raw_value)
+        except (TypeError, ValueError):
+            raise ValueError(f"stat {key!r} must be an integer")
+    return cleaned
+
+
+def _clean_character_inventory(inventory: list[Any]) -> list[str]:
+    if not isinstance(inventory, list):
+        raise ValueError("inventory must be a list")
+    cleaned: list[str] = []
+    for raw_item in inventory[:MAX_CHARACTER_INVENTORY]:
+        item = str(raw_item).strip()[:120]
+        if item:
+            cleaned.append(item)
+    return cleaned
 
 
 async def update_guest_character(
@@ -534,7 +597,7 @@ async def set_ready(room_code: str, slot: PlayerSlot, is_ready: bool) -> Session
             raise ValueError(f"slot {slot.value} not joined")
         cp.is_ready = is_ready
         rt.touch()
-        # If both ready in LOBBY, advance to HOST_TURN.
+        # If both ready in LOBBY, advance to the configured first actor.
         if (
             rt.status == SessionStatus.LOBBY
             and PlayerSlot.HOST in rt.players
@@ -542,8 +605,13 @@ async def set_ready(room_code: str, slot: PlayerSlot, is_ready: bool) -> Session
             and rt.players[PlayerSlot.HOST].is_ready
             and rt.players[PlayerSlot.GUEST].is_ready
         ):
-            rt.status = SessionStatus.HOST_TURN
-            rt.starting_slot_this_round = PlayerSlot.HOST
+            rt.status = _turn_status_for_slot(rt.starting_slot_this_round)
+            state = await state_manager.load_state(rt.campaign_id)
+            rt.kickoff_needed = (
+                rt.turn_number == 0
+                and state is not None
+                and not any(getattr(message, "is_kickoff", False) for message in state.messages)
+            )
             await _persist_session_status(rt)
         return rt
 
@@ -649,6 +717,8 @@ async def submit_action(
             raise ValueError("not yet in play; both players must ready up")
         if rt.status == SessionStatus.ARCHIVED:
             raise ValueError("session is archived")
+        if rt.kickoff_needed or rt.kickoff_in_progress:
+            raise ValueError("opening scene in progress")
 
         active = _expected_active_slot(rt.status)
         if active is None or slot != active:
@@ -669,12 +739,61 @@ async def submit_action(
         return rt, "ready_to_generate"
 
 
+async def set_starting_slot(room_code: str, slot: PlayerSlot) -> SessionRuntime:
+    """Set which player acts first before a lobby advances into play."""
+    rt = await get_session(room_code)
+    if rt is None:
+        raise ValueError("session not found")
+    async with rt.lock:
+        if rt.status != SessionStatus.LOBBY:
+            raise ValueError("starting slot can only be changed in the lobby")
+        rt.starting_slot_this_round = slot
+        await _persist_session_status(rt)
+        rt.touch()
+        return rt
+
+
+async def begin_aux_generation(room_code: str) -> tuple[SessionRuntime, SessionStatus]:
+    """Enter GENERATING for reroll/continue without consuming the current floor."""
+    rt = await get_session(room_code)
+    if rt is None:
+        raise ValueError("session not found")
+    async with rt.lock:
+        if rt.status not in (SessionStatus.HOST_TURN, SessionStatus.GUEST_TURN):
+            raise ValueError("session is not ready for generation")
+        restore_status = rt.status
+        rt.status = SessionStatus.GENERATING
+        await _persist_session_status(rt)
+        rt.touch()
+        return rt, restore_status
+
+
+async def finish_aux_generation(
+    room_code: str,
+    restore_status: SessionStatus,
+) -> SessionRuntime | None:
+    """Restore the current floor after a reroll/continue stream finishes."""
+    rt = await get_session(room_code)
+    if rt is None:
+        return None
+    async with rt.lock:
+        if rt.status == SessionStatus.GENERATING:
+            rt.status = restore_status
+            await _persist_session_status(rt)
+        rt.touch()
+        return rt
+
+
 def _expected_active_slot(status: SessionStatus) -> PlayerSlot | None:
     if status == SessionStatus.HOST_TURN:
         return PlayerSlot.HOST
     if status == SessionStatus.GUEST_TURN:
         return PlayerSlot.GUEST
     return None
+
+
+def _turn_status_for_slot(slot: PlayerSlot) -> SessionStatus:
+    return SessionStatus.HOST_TURN if slot == PlayerSlot.HOST else SessionStatus.GUEST_TURN
 
 
 def current_active_slot(rt: SessionRuntime) -> PlayerSlot | None:
@@ -692,6 +811,31 @@ async def consume_pending_actions(room_code: str) -> dict[PlayerSlot, str]:
         rt.pending_actions.clear()
         rt.touch()
         return snapshot
+
+
+async def begin_kickoff_if_needed(room_code: str) -> SessionRuntime | None:
+    """Mark the room's opening-scene kickoff as in progress if one is pending."""
+    rt = await get_session(room_code)
+    if rt is None:
+        return None
+    async with rt.lock:
+        if not rt.kickoff_needed or rt.kickoff_in_progress:
+            return None
+        rt.kickoff_needed = False
+        rt.kickoff_in_progress = True
+        rt.touch()
+        return rt
+
+
+async def finish_kickoff(room_code: str) -> SessionRuntime | None:
+    """Clear the in-memory kickoff generation flag."""
+    rt = await get_session(room_code)
+    if rt is None:
+        return None
+    async with rt.lock:
+        rt.kickoff_in_progress = False
+        rt.touch()
+        return rt
 
 
 async def begin_next_round(room_code: str) -> SessionRuntime:
@@ -770,9 +914,19 @@ async def delete_session(room_code: str) -> bool:
     if rt is None:
         return False
     campaign_id = rt.campaign_id
+    ooc_log_path = _ooc_log_path(rt.room_code)
     async with _sessions_guard:
         _sessions.pop(rt.room_code, None)
     await state_manager.delete_campaign(campaign_id)
+
+    def _delete_ooc_log() -> None:
+        try:
+            ooc_log_path.unlink()
+        except FileNotFoundError:
+            pass
+
+    async with _ooc_log_guard:
+        await asyncio.to_thread(_delete_ooc_log)
     return True
 
 
@@ -794,6 +948,88 @@ async def _persist_session_status(rt: SessionRuntime) -> None:
 # ---------------------------------------------------------------------------
 # Broadcasts
 # ---------------------------------------------------------------------------
+
+
+def _normalize_ooc_entry(raw: dict[str, Any]) -> dict[str, Any] | None:
+    slot = str(raw.get("slot") or "").strip().lower()
+    if slot not in {PlayerSlot.HOST.value, PlayerSlot.GUEST.value}:
+        return None
+    text = str(raw.get("text") or "").strip()[:MAX_OOC_MESSAGE_LEN]
+    if not text:
+        return None
+    display_name = str(raw.get("display_name") or slot).strip()[:80] or slot
+    ts = str(raw.get("ts") or "").strip()[:80]
+    if not ts:
+        ts = datetime.now(timezone.utc).isoformat()
+    return {
+        "slot": slot,
+        "display_name": display_name,
+        "text": text,
+        "ts": ts,
+    }
+
+
+async def append_ooc(
+    room_code: str,
+    slot: PlayerSlot,
+    display_name: str,
+    text: str,
+    ts: str,
+) -> dict[str, Any]:
+    """Append one out-of-character chat message to the room's JSONL log."""
+    entry = _normalize_ooc_entry({
+        "slot": slot.value,
+        "display_name": display_name,
+        "text": text,
+        "ts": ts,
+    })
+    if entry is None:
+        raise ValueError("invalid OOC message")
+
+    path = _ooc_log_path(room_code)
+
+    def _append() -> None:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with path.open("a", encoding="utf-8") as f:
+            f.write(json.dumps(entry, ensure_ascii=True, separators=(",", ":")) + "\n")
+
+    async with _ooc_log_guard:
+        await asyncio.to_thread(_append)
+    return entry
+
+
+async def read_ooc_log(room_code: str, limit: int = 100) -> list[dict[str, Any]]:
+    """Read the most recent OOC messages for a room."""
+    try:
+        normalized_limit = max(0, int(limit))
+    except (TypeError, ValueError):
+        normalized_limit = 100
+    if normalized_limit == 0:
+        return []
+
+    path = _ooc_log_path(room_code)
+
+    def _read() -> list[dict[str, Any]]:
+        try:
+            lines = path.read_text(encoding="utf-8").splitlines()
+        except FileNotFoundError:
+            return []
+
+        entries: list[dict[str, Any]] = []
+        for line in lines[-normalized_limit:]:
+            try:
+                raw = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if not isinstance(raw, dict):
+                continue
+            entry = _normalize_ooc_entry(raw)
+            if entry is not None:
+                entries.append(entry)
+        return entries
+
+    async with _ooc_log_guard:
+        return await asyncio.to_thread(_read)
 
 
 async def broadcast(rt: SessionRuntime, message: dict[str, Any]) -> None:

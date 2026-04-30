@@ -56,7 +56,7 @@ const content = {
         <p className="text-amber-400 font-semibold">The basic loop</p>
         <ol className="list-decimal list-inside space-y-2">
           <li>Type what your character does in the box at the bottom of the screen.</li>
-          <li>Press <span className="font-mono text-xs bg-slate-700 px-1 rounded">Enter</span> or click <span className="font-mono text-xs bg-slate-700 px-1 rounded">Commit</span>.</li>
+          <li>Press <span className="font-mono text-xs bg-slate-700 px-1 rounded">Enter</span> or click <span className="font-mono text-xs bg-slate-700 px-1 rounded">Send</span>.</li>
           <li>The GM writes the next beat of the story.</li>
           <li>Repeat.</li>
         </ol>
@@ -64,7 +64,7 @@ const content = {
       </div>
       <div className="space-y-2">
         <p className="text-amber-400 font-semibold">Dice checks</p>
-        <p>If your action involves risk (attacking, sneaking, persuading, searching), the game rolls a d20 automatically. You don't need to ask for a roll — just describe the action. The result appears as a badge in the header and shapes the GM's response.</p>
+        <p>If your action involves risk (attacking, sneaking, persuading, searching), the game rolls a d20 automatically. You don't need to ask for a roll — just describe the action. The result appears above the GM's response and shapes what happens next.</p>
         <p className="text-slate-400 italic text-xs">Stat values of 50 = +0 modifier. Each 10 points above or below 50 adds or subtracts 1 from the roll.</p>
       </div>
       <div className="space-y-2">
@@ -82,7 +82,7 @@ const content = {
       </div>
       <div className="space-y-2">
         <p className="text-amber-400 font-semibold">Quick Actions bar</p>
-        <p>Click the <span className="font-mono text-xs bg-slate-700 px-1 rounded">⚡ Actions</span> toggle above the input to open preset action buttons. Each one pre-fills the input with a template you can edit before sending.</p>
+        <p>Click the <span className="font-mono text-xs bg-slate-700 px-1 rounded">⚡ Actions</span> toggle above the input to open preset action buttons. Templates with placeholders open a small form before inserting into the action box.</p>
       </div>
     </div>
   ),
@@ -107,7 +107,7 @@ const content = {
             <p className="text-slate-400 mt-1">Reverses the last director edit, including stat and NPC changes.</p>
           </div>
           <div className="bg-amber-900/30 border border-amber-700/40 rounded p-2">
-            <span className="text-amber-400 font-bold">Fork Timeline</span>
+            <span className="text-amber-400 font-bold">Branch Story</span>
             <p className="text-slate-400 mt-1">Duplicates the campaign right now. Explore an alternate path without losing the original story.</p>
           </div>
           <div className="bg-slate-800/60 rounded p-2">
@@ -174,13 +174,27 @@ const content = {
   )
 };
 
-export default function HelpModal({ onClose }) {
+export default function HelpModal({ onClose, manageLaunchPreference = false }) {
   const [activeTab, setActiveTab] = useState(TABS[0]);
+  const [dontShowAutomatically, setDontShowAutomatically] = useState(false);
+
+  const handleClose = () => {
+    try {
+      if (dontShowAutomatically) {
+        window.localStorage?.setItem('tt_has_launched', '1');
+      } else if (manageLaunchPreference) {
+        window.localStorage?.removeItem('tt_has_launched');
+      }
+    } catch {
+      // Local storage can be unavailable in privacy modes.
+    }
+    onClose();
+  };
 
   return (
     <div
       className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 backdrop-blur-sm p-4"
-      onClick={onClose}
+      onClick={handleClose}
     >
       <div
         className="bg-fantasy-panel border border-slate-600 rounded-lg shadow-2xl w-full max-w-2xl max-h-[85vh] flex flex-col overflow-hidden"
@@ -189,7 +203,7 @@ export default function HelpModal({ onClose }) {
         {/* Header */}
         <div className="p-4 border-b border-slate-700 flex justify-between items-center flex-shrink-0">
           <h2 className="font-serif text-lg text-fantasy-accent">Help & Guide</h2>
-          <button onClick={onClose} className="text-slate-400 hover:text-slate-200 text-xl leading-none">✗</button>
+          <button onClick={handleClose} className="text-slate-400 hover:text-slate-200 text-xl leading-none">✗</button>
         </div>
 
         {/* Tabs */}
@@ -212,6 +226,20 @@ export default function HelpModal({ onClose }) {
         {/* Content */}
         <div className="p-5 overflow-y-auto flex-1">
           {content[activeTab]}
+        </div>
+        <div className="border-t border-slate-700 px-5 py-3 flex items-center justify-between gap-3 bg-fantasy-dark/40">
+          <label className="flex items-center gap-2 text-xs text-slate-300">
+            <input
+              type="checkbox"
+              checked={dontShowAutomatically}
+              onChange={(e) => setDontShowAutomatically(e.target.checked)}
+              className="accent-amber-500"
+            />
+            Don&apos;t show this automatically next time
+          </label>
+          <button onClick={handleClose} className="bg-fantasy-accent hover:bg-amber-600 text-white rounded px-3 py-1.5 text-xs font-bold">
+            Close
+          </button>
         </div>
       </div>
     </div>
