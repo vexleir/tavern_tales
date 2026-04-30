@@ -409,7 +409,12 @@ def _compose_title(theme_labels: list[str], overlap_only: bool = False) -> str:
     if not theme_labels:
         return "Overlap-Compatible Premise" if overlap_only else "Preference-Guided Premise"
     if overlap_only:
-        return f"Shared {theme_labels[0]} Premise"
+        first = theme_labels[0]
+        # Avoid stutters like "Shared shared boundaries" when the label already
+        # carries a sharedness word.
+        if first.lower().startswith(("shared", "mutual", "overlap")):
+            return f"{first[:1].upper()}{first[1:]} Premise"
+        return f"Shared {first} Premise"
     if len(theme_labels) == 1:
         return f"A {theme_labels[0]} Premise"
     return f"A Premise of {theme_labels[0]} & {theme_labels[1]}"
@@ -486,7 +491,11 @@ def build_random_fantasy(
         seed_prompt += " Use fade-to-black handling for explicit detail."
 
     campaign_seed = CampaignSeed(
-        worldConcept="A flexible roleplay setup shaped by the selected preference themes.",
+        worldConcept=(
+            "A flexible roleplay setup shaped by the selected preference themes: "
+            + ", ".join(labels)
+            + "."
+        ),
         startingScene=(
             "Begin at a quiet decision point where the protagonist can choose how to engage. "
             "Use tension, trust, and boundaries as story texture."
@@ -512,7 +521,7 @@ def build_random_fantasy(
         sharingMode=sharing_mode,
         seedPrompt=seed_prompt,
         synopsis=synopsis,
-        content=synopsis,
+        content=content,
         campaignSeed=campaign_seed,
     )
 
@@ -539,8 +548,40 @@ def build_overlap_fantasy(
         + "; ".join(labels)
         + "."
     )
+    # Identity bits and intensity for the overlap blurb pull from the matched
+    # entries themselves so we don't leak either profile's solo settings.
+    intensity_bits = sorted({m.get("intensity") for m in comparison["matches"][:len(selected)] if m.get("intensity")})
+    inferred_intensity: IntensityPreference | None = None
+    if intensity_bits:
+        try:
+            inferred_intensity = IntensityPreference(intensity_bits[0])
+        except ValueError:
+            inferred_intensity = None
+    fade_to_black_overlap = bool(
+        first.globalPreferences.fadeToBlack or second.globalPreferences.fadeToBlack
+    )
+    role_bits = [
+        f"{match['label']}: shared role {match.get('sharedRole', 'both')}"
+        for match in comparison["matches"][:len(selected)]
+    ]
+    title = _compose_title(labels, overlap_only=True)
+    synopsis = _compose_synopsis(labels, identity_bits=[], fade_to_black=fade_to_black_overlap)
+    content = _compose_content(
+        theme_labels=labels,
+        role_bits=role_bits,
+        identity_bits=[],
+        intensity=inferred_intensity,
+        fade_to_black=fade_to_black_overlap,
+        favorites_only=False,
+        explore_lower_interest=False,
+        overlap_only=True,
+    )
     campaign_seed = CampaignSeed(
-        worldConcept="A flexible roleplay setup shaped only by mutually compatible profile overlap.",
+        worldConcept=(
+            "A flexible roleplay setup shaped by mutually compatible overlap themes: "
+            + ", ".join(labels)
+            + "."
+        ),
         startingScene=(
             "Begin with a calm, consent-aware setup where both participants can choose how to proceed. "
             "Keep the scene conceptual, story-forward, and bounded by the shared overlap."
@@ -557,21 +598,15 @@ def build_overlap_fantasy(
     return GeneratedFantasy(
         ownerProfileId=first.profileId,
         ownerUserId=first.userId,
-        title="Overlap-Compatible Fantasy",
+        title=title,
         createdAt=now,
         updatedAt=now,
         createdFromProfileVersion=first.profileVersion,
         preferenceSnapshot=snapshot,
         sharingMode=SharingMode.OVERLAP_ONLY,
         seedPrompt=seed_prompt,
-        synopsis=(
-            "A non-graphic, story-oriented roleplay premise built from mutually compatible profile overlap. "
-            "It keeps fantasy and real-world willingness separate."
-        ),
-        content=(
-            "A non-graphic, story-oriented roleplay premise built from mutually compatible profile overlap. "
-            "It keeps fantasy and real-world willingness separate."
-        ),
+        synopsis=synopsis,
+        content=content,
         campaignSeed=campaign_seed,
     )
 

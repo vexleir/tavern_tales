@@ -210,6 +210,91 @@ def test_random_fantasy_uses_profile_context_and_creates_campaign_seed(temp_pref
     assert fantasy.preferenceSnapshot.realityBridgeIncluded is True
 
 
+def test_random_fantasy_synopsis_and_content_are_distinct_and_theme_aware(temp_preference_dirs):
+    import preference_logic
+    import preference_store
+    from preference_schema import IntensityPreference
+
+    profile = preference_store.new_profile("Sam")
+    profile.globalPreferences.gender = "nb"
+    profile.globalPreferences.fadeToBlack = True
+    item = _mark_first_item(profile)
+    item.intensityPreference = IntensityPreference.MODERATE
+
+    fantasy = preference_logic.build_random_fantasy(
+        profile,
+        category_ids=[profile.categories[0].id],
+        intensity=IntensityPreference.MODERATE,
+        favorites_only=True,
+    )
+
+    # Synopsis and content must not be the same boilerplate.
+    assert fantasy.synopsis != fantasy.content
+    # Synopsis names the chosen theme rather than a generic sentence.
+    assert item.label.lower() in fantasy.synopsis.lower()
+    # Synopsis surfaces fade-to-black and identity context.
+    assert "fade-to-black" in fantasy.synopsis.lower()
+    assert "gender: nb" in fantasy.synopsis.lower()
+    # Content lists the theme as a bullet, with framing + opening beat sections.
+    assert "Selected themes:" in fantasy.content
+    assert f"- {item.label}" in fantasy.content
+    assert "target intensity: moderate" in fantasy.content
+    assert "fade-to-black" in fantasy.content.lower()
+    assert "Opening beat" in fantasy.content
+    # Title is theme-aware, not a generic placeholder.
+    assert "Premise" in fantasy.title
+    assert "Fantasy" not in fantasy.title  # old "<theme> Fantasy" placeholder is gone
+    # Campaign seed worldConcept now references the actual themes.
+    assert item.label in fantasy.campaignSeed.worldConcept
+
+
+def test_overlap_fantasy_synopsis_and_content_are_distinct_and_overlap_aware(temp_preference_dirs):
+    import preference_logic
+    import preference_store
+    from preference_schema import (
+        ContextType,
+        FantasyInterest,
+        GiverReceiverRole,
+        PartnerSharePermission,
+        RealWorldWillingness,
+        TextRoleplayWillingness,
+    )
+
+    first = preference_store.new_profile("Alex")
+    second = preference_store.new_profile("Jordan")
+    # Mark the same item as a real overlap match in both profiles. Items default
+    # to PRIVATE share permission, which compare_profiles filters out, so we
+    # explicitly relax it on both sides.
+    for prof in (first, second):
+        item = prof.categories[0].items[0]
+        item.fantasyInterest = FantasyInterest.HIGH
+        item.textRoleplayWillingness = TextRoleplayWillingness.YES
+        item.realWorldWillingness = RealWorldWillingness.MAYBE
+        item.giverReceiverRole = GiverReceiverRole.BOTH
+        item.partnerSharePermission = PartnerSharePermission.FULL
+        if ContextType.AI not in item.context:
+            item.context.append(ContextType.AI)
+
+    fantasy = preference_logic.build_overlap_fantasy(first, second, selected_count=2)
+
+    matched_label = first.categories[0].items[0].label
+    # Sanity-check the comparison actually produced a match before asserting on
+    # the overlap-aware copy.
+    assert fantasy.preferenceSnapshot.selectedThemes, (
+        "compare_profiles produced no matches; fix the test setup before checking copy"
+    )
+
+    assert fantasy.synopsis != fantasy.content
+    assert matched_label.lower() in fantasy.synopsis.lower()
+    assert "Selected themes:" in fantasy.content
+    assert f"- {matched_label}" in fantasy.content
+    assert "overlap-only" in fantasy.content.lower()
+    # Title should not double the word "shared" even when a fallback label is used.
+    assert "shared shared" not in fantasy.title.lower()
+    # Campaign seed worldConcept names the matched theme.
+    assert matched_label in fantasy.campaignSeed.worldConcept
+
+
 @pytest.mark.asyncio
 async def test_password_protected_fantasy_hides_and_unlocks_content(temp_preference_dirs):
     import preference_logic
