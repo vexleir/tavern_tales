@@ -12,6 +12,7 @@ import { apiFetch, describeApiError } from './lib/api';
  */
 export default function MultiplayerPlay({
   roomCode,
+  joinUrl = '',
   mySlot,
   sessionState,
   multiplayer,
@@ -280,6 +281,8 @@ export default function MultiplayerPlay({
             </div>
           </header>
 
+          <RoomShareBanner roomCode={roomCode} joinUrl={joinUrl} />
+
           {loadError && (
             <div className="bg-red-900/30 border border-red-900/50 text-red-200 px-3 py-2 mb-2 text-sm rounded">
               {loadError}
@@ -414,6 +417,47 @@ export default function MultiplayerPlay({
           <CharacterSheetsPanel multiplayer={multiplayer} mySlot={mySlot} onUpdateCharacter={onUpdateCharacter} />
         </aside>
       </div>
+    </div>
+  );
+}
+
+function RoomShareBanner({ roomCode, joinUrl }) {
+  const [copyState, setCopyState] = useState(null); // null | 'code' | 'link'
+
+  const copy = async (text, kind) => {
+    try {
+      await navigator.clipboard?.writeText(text);
+      setCopyState(kind);
+      window.setTimeout(() => setCopyState(null), 1500);
+    } catch {
+      // clipboard may be unavailable on http or in restricted contexts
+    }
+  };
+
+  if (!roomCode) return null;
+
+  return (
+    <div className="bg-fantasy-panel/30 border border-slate-700/40 rounded px-3 py-2 mb-2 text-xs font-sans flex flex-wrap items-center gap-2">
+      <span className="text-slate-400">Room:</span>
+      <button
+        type="button"
+        onClick={() => copy(roomCode, 'code')}
+        title="Copy room code"
+        className="font-mono tracking-widest text-amber-300 bg-slate-900/60 border border-slate-700 rounded px-2 py-0.5 hover:border-amber-600"
+      >{roomCode}</button>
+      {copyState === 'code' && <span className="text-emerald-400">copied!</span>}
+      {joinUrl && (
+        <>
+          <span className="text-slate-600">·</span>
+          <button
+            type="button"
+            onClick={() => copy(joinUrl, 'link')}
+            title="Copy invite link"
+            className="text-slate-300 hover:text-amber-300 underline underline-offset-2"
+          >Copy invite link</button>
+          {copyState === 'link' && <span className="text-emerald-400">copied!</span>}
+        </>
+      )}
     </div>
   );
 }
