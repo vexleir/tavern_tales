@@ -188,19 +188,27 @@ async def initialize() -> None:
         # Sessions always come back paused on restart — connections are gone.
         runtime.status = SessionStatus.PAUSED
         runtime.paused_status_before = state.multiplayer.session_status
-        # If the server crashed mid-generation, GENERATING is not a valid
-        # resume state. Derive the correct next-turn slot instead.
-        if runtime.paused_status_before == SessionStatus.GENERATING:
-            next_slot = (
-                PlayerSlot.GUEST
-                if state.multiplayer.starting_slot_this_round == PlayerSlot.HOST
-                else PlayerSlot.HOST
-            )
+        # GENERATING (server crashed mid-stream) and PAUSED (already paused on
+        # disk before restart) are not valid resume targets. If we restored to
+        # PAUSED, the session would lock forever once both players reconnect.
+        # Derive the correct next-turn slot from the round-starter instead.
+        if runtime.paused_status_before in (SessionStatus.GENERATING, SessionStatus.PAUSED):
+            previous = runtime.paused_status_before
+            starter = state.multiplayer.starting_slot_this_round
+            # PAUSED on disk means we lost the pre-pause status. Best guess:
+            # hand the floor to the round-starter so the game can resume.
+            # GENERATING means a turn was mid-generation; the next actor is the
+            # other player.
+            if previous == SessionStatus.GENERATING:
+                next_slot = PlayerSlot.GUEST if starter == PlayerSlot.HOST else PlayerSlot.HOST
+            else:  # PAUSED
+                next_slot = starter
             runtime.paused_status_before = (
                 SessionStatus.HOST_TURN if next_slot == PlayerSlot.HOST else SessionStatus.GUEST_TURN
             )
             log.info(
-                "Corrected GENERATING->pause for session %s to %s",
+                "Corrected %s->pause for session %s to %s",
+                previous.value,
                 runtime.room_code,
                 runtime.paused_status_before,
             )

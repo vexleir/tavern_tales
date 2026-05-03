@@ -128,10 +128,19 @@ def _character_name_for_slot(state: CampaignState, slot: PlayerSlot) -> str:
     return "Guest"
 
 
-def _render_multiplayer_narration_rules(state: CampaignState) -> str:
-    """Rules that override single-player POV guidance for multiplayer turns."""
+def _render_multiplayer_narration_rules(
+    state: CampaignState,
+    acting_slot: PlayerSlot | None = None,
+) -> str:
+    """Rules that override single-player POV guidance for multiplayer turns.
+
+    `acting_slot` is the player whose action we are about to narrate. If omitted
+    (kickoff scene), we fall back to `starting_slot_this_round` which names who
+    will act first.
+    """
     assert state.multiplayer is not None
-    acting_slot = state.multiplayer.starting_slot_this_round
+    if acting_slot is None:
+        acting_slot = state.multiplayer.starting_slot_this_round
     next_slot = _other_slot(acting_slot)
     acting_name = _character_name_for_slot(state, acting_slot)
     next_name = _character_name_for_slot(state, next_slot)
@@ -142,7 +151,8 @@ def _render_multiplayer_narration_rules(state: CampaignState) -> str:
         f"The latest user message is command text from the active player. If it uses I, me, my, or we, render those words as {acting_name}'s intended action in third-person prose.",
         f"Write the response as story narration about {acting_name}, not as {acting_name} and not addressed to {acting_name}.",
         "Narrate player-character actions in third-person present tense using character names or pronouns. Do not use second person ('you') for player characters in multiplayer.",
-        "Do not write first-person narration for either player character. Do not decide either player character's new actions, dialogue, thoughts, or feelings beyond the submitted input.",
+        "Do not write first-person narration for either player character. First-person pronouns (I, me, my, we, us, our) are forbidden in narration; only allow them inside double-quoted character dialogue.",
+        "Do not decide either player character's new actions, dialogue, thoughts, or feelings beyond the submitted input.",
         f"End at a decision point that clearly hands the spotlight to {next_name}. Make the handoff visible in prose, not as a UI label or menu.",
     ])
 
@@ -295,6 +305,7 @@ def _build_system_prompt(
     memories: list[dict],
     window_msg_contents: list[str],
     turn_context: str = "",
+    acting_slot: PlayerSlot | None = None,
 ) -> tuple[str, BlockTokens]:
     tokens = BlockTokens()
     parts: list[str] = []
@@ -305,7 +316,7 @@ def _build_system_prompt(
     tokens.role_rules = count_tokens(role_rules)
 
     if state.multiplayer is not None:
-        body = _render_multiplayer_narration_rules(state)
+        body = _render_multiplayer_narration_rules(state, acting_slot=acting_slot)
         s = _section("MULTIPLAYER NARRATION RULES", body)
         parts.append(s)
         tokens.role_rules += count_tokens(s)
@@ -452,6 +463,7 @@ def build_prompt(
     turn_context: str = "",
     response_budget: int = 512,
     system_reserve: int = 1500,
+    acting_slot: PlayerSlot | None = None,
 ) -> BuiltPrompt:
     """
     Construct the full list of messages to send to the GM model.
@@ -459,6 +471,9 @@ def build_prompt(
     `user_message` — if provided, is appended as the final user turn. If None,
     the caller is responsible for having already appended a user message to
     state.messages (e.g. kickoff flow).
+
+    `acting_slot` — for multiplayer, the slot of the player whose action is
+    being narrated. Required when the acting player is not the round-starter.
     """
     retrieved_memories = retrieved_memories or []
     model_window = lookup_context_window(state.models.gm)
@@ -478,6 +493,7 @@ def build_prompt(
         retrieved_memories,
         window_contents,
         turn_context=turn_context,
+        acting_slot=acting_slot,
     )
 
     messages: list[dict[str, str]] = [{"role": "system", "content": system_text}]

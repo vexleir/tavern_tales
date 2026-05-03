@@ -41,13 +41,19 @@ export default function MultiplayerLobby({
   // The form is initialized from the current character once. After that,
   // local edits are canonical until the player clicks Save. Server-side
   // updates from another tab won't overwrite their in-progress edits.
-  const [draft, setDraft] = useState(() => ({
-    name: myCharacter?.name || '',
-    gender: myCharacter?.gender || '',
-    appearance: myCharacter?.appearance || '',
-    description: myCharacter?.description || '',
-    location: myCharacter?.location || '',
-  }));
+  // Backend placeholder names ("Unnamed", "Host", "Guest") are treated as empty
+  // so the player sees a clean prompt to enter their character name.
+  const [draft, setDraft] = useState(() => {
+    const placeholders = new Set(['', 'Unnamed', 'Host', 'Guest']);
+    const initialName = placeholders.has(myCharacter?.name || '') ? '' : myCharacter.name;
+    return {
+      name: initialName,
+      gender: myCharacter?.gender || '',
+      appearance: myCharacter?.appearance || '',
+      description: myCharacter?.description || '',
+      location: myCharacter?.location || '',
+    };
+  });
 
   const bothJoined = useMemo(
     () => Boolean(sessionState?.players?.host && sessionState?.players?.guest),
@@ -241,7 +247,8 @@ function CharacterCard({ title, isYou, player, character, editable, draft, setDr
 
       {editable && (
         <div className="space-y-2 font-sans text-sm">
-          <LabeledInput label="Name" value={draft.name} onChange={(v) => setDraft({ ...draft, name: v })} onBlur={scheduleSave} maxLength={80} />
+          <p className="text-xs text-slate-400 italic mb-1">Set up your in-game character. Required: Name. Other fields help the GM describe you.</p>
+          <LabeledInput label="Character Name" value={draft.name} onChange={(v) => setDraft({ ...draft, name: v })} onBlur={scheduleSave} maxLength={80} placeholder="e.g. Aria the Rogue" />
           <LabeledInput label="Gender" value={draft.gender} onChange={(v) => setDraft({ ...draft, gender: v })} onBlur={scheduleSave} maxLength={40} />
           <LabeledInput label="Location" value={draft.location} onChange={(v) => setDraft({ ...draft, location: v })} onBlur={scheduleSave} maxLength={200} />
           <LabeledTextarea label="Appearance" value={draft.appearance} onChange={(v) => setDraft({ ...draft, appearance: v })} onBlur={scheduleSave} maxLength={600} rows={2} />
@@ -252,7 +259,7 @@ function CharacterCard({ title, isYou, player, character, editable, draft, setDr
   );
 }
 
-function LabeledInput({ label, value, onChange, onBlur, maxLength }) {
+function LabeledInput({ label, value, onChange, onBlur, maxLength, placeholder }) {
   return (
     <label className="block">
       <span className="text-xs uppercase text-slate-400 tracking-widest">{label}</span>
@@ -260,9 +267,10 @@ function LabeledInput({ label, value, onChange, onBlur, maxLength }) {
         type="text"
         value={value || ''}
         maxLength={maxLength}
+        placeholder={placeholder}
         onChange={(e) => onChange(e.target.value)}
         onBlur={onBlur}
-        className="block w-full bg-slate-900 border border-slate-700 rounded px-2 py-1 text-amber-100"
+        className="block w-full bg-slate-900 border border-slate-700 rounded px-2 py-1 text-amber-100 placeholder:text-slate-500"
       />
     </label>
   );

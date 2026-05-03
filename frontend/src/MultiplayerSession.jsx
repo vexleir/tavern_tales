@@ -107,6 +107,7 @@ export default function MultiplayerSession({
     return (
       <MultiplayerPlay
         roomCode={roomCode}
+        joinUrl={joinUrl}
         campaignId={state.sessionState?.campaign_id}
         mySlot={state.mySlot}
         sessionState={state.sessionState}
@@ -189,7 +190,9 @@ export function MultiplayerEntry({
   // so we never have to setRoomCode inside an effect.
   const [roomCode, setRoomCode] = useState(() => _initialRoomCodeFrom(initialRoomCode));
   const [displayName, setDisplayName] = useState(initialJoinPayload?.displayName || '');
-  const [characterName, setCharacterName] = useState(initialJoinPayload?.characterName || '');
+  // Character name is configured in the lobby (with appearance, gender, etc.). We still
+  // keep it here so the host flow from CampaignCreator can pre-seed it through the join payload.
+  const characterName = initialJoinPayload?.characterName || '';
   const [preferenceProfile, setPreferenceProfile] = useState(initialJoinPayload?.preferenceProfile || null);
   const [preferenceSource, setPreferenceSource] = useState(initialJoinPayload?.preferenceSource || 'none');
   const [preferenceTab, setPreferenceTab] = useState('skip'); // skip | quick | import
@@ -302,7 +305,9 @@ export function MultiplayerEntry({
   };
 
   const hasUnsavedPreferences = Boolean(preferenceProfile && preferenceTab !== 'skip');
-  const ready = roomCode.length >= 4 && roomCheck.exists && displayName.trim() && characterName.trim();
+  // Character name is set inside the lobby (along with appearance, gender, etc.) so we no longer
+  // ask for it twice. Only Display Name is required to enter — it's how others identify the human.
+  const ready = roomCode.length >= 4 && roomCheck.exists && displayName.trim();
 
   const handleBack = () => {
     if (hasUnsavedPreferences && !window.confirm('Leave? Your preference setup will be lost.')) {
@@ -352,12 +357,9 @@ export function MultiplayerEntry({
 
           <Field label="Your Display Name">
             <input value={displayName} onChange={(e) => setDisplayName(e.target.value)} maxLength={80}
-              className="w-full bg-slate-900 border border-slate-700 rounded px-3 py-2 text-amber-100" />
-          </Field>
-
-          <Field label="Your Character Name">
-            <input value={characterName} onChange={(e) => setCharacterName(e.target.value)} maxLength={80}
-              className="w-full bg-slate-900 border border-slate-700 rounded px-3 py-2 text-amber-100" />
+              placeholder="How your partner will see you in chat (your real name or handle)"
+              className="w-full bg-slate-900 border border-slate-700 rounded px-3 py-2 text-amber-100 placeholder:text-slate-500 placeholder:text-xs" />
+            <p className="text-xs text-slate-500 mt-1">You'll set up your character (name, appearance, etc.) in the next screen.</p>
           </Field>
 
           <div className="pt-2">

@@ -1835,6 +1835,7 @@ async def _run_multiplayer_reroll(
                 state=pruned,
                 user_message=prev_user.content,
                 retrieved_memories=memories,
+                acting_slot=acting_slot,
             )
             _LAST_PROMPT[campaign_id] = {
                 "system_prompt": built.system_prompt,
@@ -2005,6 +2006,7 @@ async def _run_multiplayer_continue(
                 state=state,
                 user_message=continue_prompt,
                 retrieved_memories=memories,
+                acting_slot=acting_slot,
             )
             _LAST_PROMPT[campaign_id] = {
                 "system_prompt": built.system_prompt,
@@ -2308,6 +2310,7 @@ async def _run_multiplayer_turn(room_code: str) -> None:
             user_message=user_message,
             retrieved_memories=memories,
             turn_context=turn_context,
+            acting_slot=acting_slot,
         )
         _LAST_PROMPT[campaign_id] = {
             "system_prompt": built.system_prompt,
