@@ -267,6 +267,7 @@ class CreateSessionRequest(BaseModel):
     campaign_id: str
     host_character: dict[str, Any] | None = None
     reconnect_window_seconds: int = Field(default=300, ge=30, le=86_400)
+    show_player_actions: bool = False
 
 
 class LeaveSessionRequest(BaseModel):
@@ -992,6 +993,7 @@ async def create_multiplayer_session(req: CreateSessionRequest, request: Request
             req.campaign_id,
             host_character,
             reconnect_window_seconds=req.reconnect_window_seconds,
+            show_player_actions=req.show_player_actions,
         )
     except ValueError as e:
         raise HTTPException(400, str(e))

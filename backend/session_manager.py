@@ -282,6 +282,7 @@ async def create_session(
     host_character: PlayerCharacter,
     *,
     reconnect_window_seconds: int = DEFAULT_RECONNECT_WINDOW_SECONDS,
+    show_player_actions: bool = False,
 ) -> SessionRuntime:
     """Attach a new multiplayer session to an existing campaign.
 
@@ -303,6 +304,7 @@ async def create_session(
             starting_slot_this_round=PlayerSlot.HOST,
             turn_number=0,
             reconnect_window_seconds=reconnect_window_seconds,
+            show_player_actions=show_player_actions,
         )
         state_manager.record_event(st, "session.create", f"Multiplayer session opened (room {code}).")
         return st

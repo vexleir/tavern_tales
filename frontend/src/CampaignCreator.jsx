@@ -114,6 +114,7 @@ export default function CampaignCreator({ campaignId, initialFantasyDraft, onCom
   const [gmFilter, setGmFilter] = useState('');
   const [utilityFilter, setUtilityFilter] = useState('');
   const [hostMultiplayer, setHostMultiplayer] = useState(false);
+  const [showPlayerActions, setShowPlayerActions] = useState(false);
   const [summaryInterval, setSummaryInterval] = useState(5);
   const [submitError, setSubmitError] = useState('');
 
@@ -385,6 +386,7 @@ export default function CampaignCreator({ campaignId, initialFantasyDraft, onCom
                 stats: payload.stats,
                 inventory,
               },
+              show_player_actions: showPlayerActions,
             }),
           });
           if (!sessionRes.ok) {
@@ -632,6 +634,22 @@ export default function CampaignCreator({ campaignId, initialFantasyDraft, onCom
               </span>
             </span>
           </label>
+          {hostMultiplayer && (
+            <label className="flex items-start gap-3 text-sm text-slate-300 mt-3 ml-6">
+              <input
+                type="checkbox"
+                checked={showPlayerActions}
+                onChange={(e) => setShowPlayerActions(e.target.checked)}
+                className="mt-1"
+              />
+              <span>
+                <span className="block text-amber-200 font-semibold">Show submitted player prompts above each GM response</span>
+                <span className="block text-xs text-slate-400 mt-1">
+                  Off by default. When on, both players see the action text the active player typed in alongside the GM&apos;s narration.
+                </span>
+              </span>
+            </label>
+          )}
           <div className="mt-4 flex items-center gap-3 text-sm text-slate-300">
             <label htmlFor="summaryInterval" className="flex-shrink-0">Summarize story every</label>
             <select

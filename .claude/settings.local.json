@@ -48,7 +48,8 @@
       "Bash(echo \"---exit:$?---\")",
       "Bash(curl -s -m 5 http://100.113.236.101:8000/api/health)",
       "Bash(curl -s -m 5 -I -H \"Origin: http://100.113.236.101:5173\" http://100.113.236.101:8000/api/health)",
-      "Bash(curl -s -m 5 -H \"Origin: http://100.113.236.101:5173\" http://100.113.236.101:8000/api/health -D -)"
+      "Bash(curl -s -m 5 -H \"Origin: http://100.113.236.101:5173\" http://100.113.236.101:8000/api/health -D -)",
+      "Bash(python -m pytest tests/test_multiplayer_api.py tests/test_session_manager.py tests/test_multiplayer_prompt.py -q)"
     ]
   }
 }

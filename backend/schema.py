@@ -222,6 +222,9 @@ class MultiplayerConfig(BaseModel):
     starting_slot_this_round: PlayerSlot = PlayerSlot.HOST
     turn_number: int = 0
     reconnect_window_seconds: int = 300
+    # When true, the play view shows each player's submitted action text above
+    # the GM's narration. Defaults off — the host opts in at session creation.
+    show_player_actions: bool = False
 
 
 class CampaignPreferenceContext(BaseModel):
