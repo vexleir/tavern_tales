@@ -43,8 +43,18 @@
       "Bash(powershell.exe -NonInteractive -Command \"& { Set-Location 'f:\\\\Sandbox\\\\tavern_tales'; .\\\\check.ps1 }\")",
       "Bash(grep -n \"aria-label\\\\|>?\\\\<\\\\/button\\\\|>✎\\\\|>✗\\\\|>×\\\\|>✓\\\\|>⚙\\\\|onClick.*\\\\/>$\\\\|onClick.*>.$\" f:/Sandbox/tavern_tales/frontend/src/App.jsx)",
       "Bash(python -m pytest tests/test_preferences.py::test_preference_api_create_export_and_random_fantasy tests/test_chat_flow.py tests/test_session_manager.py -q)",
+<<<<<<< HEAD
       "Bash(python -m pytest -x -q)",
       "Bash(python -c \"import kink_catalog_overrides as o; print\\('primus ok:', o.verify_admin_password\\('primus'\\)\\); print\\('old pw rejected:', not o.verify_admin_password\\('AgaMbs2017!'\\)\\)\")"
+=======
+      "Bash(curl -s -m 5 http://localhost:11434/api/tags)",
+      "Bash(curl -s -m 5 http://localhost:8000/api/health)",
+      "Bash(echo \"---exit:$?---\")",
+      "Bash(curl -s -m 5 http://100.113.236.101:8000/api/health)",
+      "Bash(curl -s -m 5 -I -H \"Origin: http://100.113.236.101:5173\" http://100.113.236.101:8000/api/health)",
+      "Bash(curl -s -m 5 -H \"Origin: http://100.113.236.101:5173\" http://100.113.236.101:8000/api/health -D -)",
+      "Bash(python -m pytest tests/test_multiplayer_api.py tests/test_session_manager.py tests/test_multiplayer_prompt.py -q)"
+>>>>>>> 4f89d4c0d99e60ac9dc2eefa57a0815150d6e0eb
     ]
   }
 }

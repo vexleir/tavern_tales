@@ -507,13 +507,14 @@ function NarrationBlock({ message, sessionState, multiplayer, live = false }) {
   const name = slotName(slot, sessionState, multiplayer, message.actor_name);
   const styles = slotStyle(slot);
   const label = message.is_kickoff ? 'Opening Scene' : `Prompted by ${name}`;
+  const showPlayerActions = Boolean(multiplayer?.show_player_actions);
   return (
     <article className={`text-fantasy-text border-l-4 ${styles.border} bg-slate-950/25 rounded-r px-3 py-2`}>
       <div className="font-sans text-[11px] uppercase tracking-widest mb-2 flex items-center gap-2">
         <span className={`border rounded px-2 py-0.5 ${styles.badge}`}>{label}</span>
         {live && <span className={`${styles.accent} normal-case tracking-normal`}>streaming</span>}
       </div>
-      {message.player_action && (
+      {showPlayerActions && message.player_action && (
         <div className="font-sans text-xs italic text-slate-400 mb-2 pl-1">
           <span className={styles.accent}>{name} said:</span> &quot;{message.player_action}&quot;
         </div>

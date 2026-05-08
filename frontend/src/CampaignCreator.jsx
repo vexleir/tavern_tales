@@ -114,6 +114,7 @@ export default function CampaignCreator({ campaignId, initialFantasyDraft, onCom
   const [gmFilter, setGmFilter] = useState('');
   const [utilityFilter, setUtilityFilter] = useState('');
   const [hostMultiplayer, setHostMultiplayer] = useState(false);
+  const [showPlayerActions, setShowPlayerActions] = useState(false);
   const [summaryInterval, setSummaryInterval] = useState(5);
   const [submitError, setSubmitError] = useState('');
 
@@ -127,18 +128,34 @@ export default function CampaignCreator({ campaignId, initialFantasyDraft, onCom
     }
   };
 
+  const refreshModels = useCallback(async () => {
+    try {
+      const res = await apiFetch('/api/models');
+      if (!res.ok) return;
+      const data = await res.json();
+      if (Array.isArray(data)) {
+        setAvailableModels(data);
+        setGmModel(prev => prev || data[0] || '');
+      }
+    } catch {
+      // Silent — health banner already conveys reachability state.
+    }
+  }, []);
+
   const refreshHealth = useCallback(async () => {
     setHealthChecking(true);
     try {
-      const res = await apiFetch('/api/health');
+      const res = await apiFetch('/api/health', { retries: 0 });
       if (!res.ok) throw new Error(await parseErrorResponse(res));
-      setOllamaHealth(await res.json());
+      const data = await res.json();
+      setOllamaHealth(data);
+      if (data?.ollama === 'ok') refreshModels();
     } catch {
-      setOllamaHealth({ ollama: 'unreachable', models_available: 0 });
+      setOllamaHealth({ ollama: 'backend_unreachable', models_available: 0 });
     } finally {
       setHealthChecking(false);
     }
-  }, []);
+  }, [refreshModels]);
 
   const toggleAdvanced = () => {
     const next = !advancedOpen;
@@ -164,7 +181,7 @@ export default function CampaignCreator({ campaignId, initialFantasyDraft, onCom
         return res.json();
       })
       .then(setOllamaHealth)
-      .catch(() => setOllamaHealth({ ollama: 'unreachable', models_available: 0 }));
+      .catch(() => setOllamaHealth({ ollama: 'backend_unreachable', models_available: 0 }));
 
     apiFetch('/api/models')
       .then(r => r.json())
@@ -176,6 +193,15 @@ export default function CampaignCreator({ campaignId, initialFantasyDraft, onCom
       })
       .catch(err => console.error('Model list fetch failed:', err));
   }, []);
+
+  // Once we're in an unhealthy state, quietly poll until it clears so the
+  // banner doesn't get stuck after the backend or Ollama comes online.
+  useEffect(() => {
+    if (!ollamaHealth) return;
+    if (ollamaHealth.ollama === 'ok') return;
+    const id = setInterval(() => { refreshHealth(); }, 4000);
+    return () => clearInterval(id);
+  }, [ollamaHealth, refreshHealth]);
 
   const applyGeneratedWorld = (data) => {
     setProtagonist(p => ({
@@ -360,6 +386,7 @@ export default function CampaignCreator({ campaignId, initialFantasyDraft, onCom
                 stats: payload.stats,
                 inventory,
               },
+              show_player_actions: showPlayerActions,
             }),
           });
           if (!sessionRes.ok) {
@@ -411,17 +438,29 @@ export default function CampaignCreator({ campaignId, initialFantasyDraft, onCom
           </section>
         )}
 
-        {ollamaHealth?.ollama === 'unreachable' && (
+        {ollamaHealth && ollamaHealth.ollama !== 'ok' && (
           <section className="bg-red-950/40 border border-red-700 rounded-xl p-4 text-sm text-red-100">
-            <div className="font-bold text-red-200">Ollama is not reachable.</div>
-            <div className="mt-1 text-red-100/80">Start Ollama and pull a model before beginning a new adventure.</div>
-            <pre className="mt-2 bg-fantasy-dark/70 rounded p-2 font-mono text-xs text-red-100">ollama pull llama3.1:8b-instruct</pre>
+            {ollamaHealth.ollama === 'backend_unreachable' ? (
+              <>
+                <div className="font-bold text-red-200">Backend is not reachable.</div>
+                <div className="mt-1 text-red-100/80">
+                  The Tavern Tales backend isn't responding yet. If you just started it, give it a few seconds — this banner will clear automatically once it's up.
+                </div>
+                <pre className="mt-2 bg-fantasy-dark/70 rounded p-2 font-mono text-xs text-red-100">cd backend &amp;&amp; python -m uvicorn main:app --reload --port 8000</pre>
+              </>
+            ) : (
+              <>
+                <div className="font-bold text-red-200">Ollama is not reachable.</div>
+                <div className="mt-1 text-red-100/80">Start Ollama and pull a model before beginning a new adventure. This banner will clear automatically once it's running.</div>
+                <pre className="mt-2 bg-fantasy-dark/70 rounded p-2 font-mono text-xs text-red-100">ollama pull llama3.1:8b-instruct</pre>
+              </>
+            )}
             <button
               onClick={refreshHealth}
               disabled={healthChecking}
               className="mt-3 bg-red-900/60 hover:bg-red-800 disabled:opacity-50 border border-red-700 rounded px-3 py-1.5 text-xs font-bold"
             >
-              {healthChecking ? 'Checking...' : 'Retry'}
+              {healthChecking ? 'Checking...' : 'Retry now'}
             </button>
           </section>
         )}
@@ -595,6 +634,22 @@ export default function CampaignCreator({ campaignId, initialFantasyDraft, onCom
               </span>
             </span>
           </label>
+          {hostMultiplayer && (
+            <label className="flex items-start gap-3 text-sm text-slate-300 mt-3 ml-6">
+              <input
+                type="checkbox"
+                checked={showPlayerActions}
+                onChange={(e) => setShowPlayerActions(e.target.checked)}
+                className="mt-1"
+              />
+              <span>
+                <span className="block text-amber-200 font-semibold">Show submitted player prompts above each GM response</span>
+                <span className="block text-xs text-slate-400 mt-1">
+                  Off by default. When on, both players see the action text the active player typed in alongside the GM&apos;s narration.
+                </span>
+              </span>
+            </label>
+          )}
           <div className="mt-4 flex items-center gap-3 text-sm text-slate-300">
             <label htmlFor="summaryInterval" className="flex-shrink-0">Summarize story every</label>
             <select
