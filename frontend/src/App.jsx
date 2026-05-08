@@ -1,6 +1,7 @@
 import { Fragment, useCallback, useEffect, useRef, useState } from 'react';
 import CampaignCreator from './CampaignCreator';
 import PreferenceProfiles from './PreferenceProfiles';
+import FantasyCreator from './FantasyCreator';
 import { MultiplayerEntry } from './MultiplayerSession';
 import BannerProvider from './components/BannerProvider';
 import HelpModal from './components/HelpModal';
@@ -804,6 +805,11 @@ function AppInner() {
           >Preference Profiles</button>
 
           <button
+            onClick={() => setAppMode('fantasy-creator')}
+            className="bg-slate-800 hover:bg-slate-700 text-pink-300 border border-slate-600 w-full py-3 rounded-lg font-sans font-bold tracking-widest text-sm uppercase transition shadow-md mb-2"
+          >Fantasy Creator (Couples)</button>
+
+          <button
             onClick={() => { setMultiplayerLaunch(null); setAppMode('multiplayer'); }}
             className="bg-slate-800 hover:bg-slate-700 text-emerald-300 border border-slate-600 w-full py-3 rounded-lg font-sans font-bold tracking-widest text-sm uppercase transition shadow-md mb-2"
           >Join Multiplayer Session</button>
@@ -958,6 +964,10 @@ function AppInner() {
         setAppMode('setup');
       }}
     />;
+  }
+
+  if (appMode === 'fantasy-creator') {
+    return <FantasyCreator onBack={() => setAppMode('menu')} />;
   }
 
   if (appMode === 'multiplayer') {

@@ -181,3 +181,40 @@ def password_decrypt_text(protected: dict[str, Any], password: str) -> str:
     except InvalidToken as e:
         raise SecureStorageError("Password did not unlock this fantasy.") from e
     return raw.decode("utf-8")
+
+
+def password_encrypt_payload(payload: dict[str, Any], password: str) -> dict[str, Any]:
+    """Wrap a JSON dict in a password-derived Fernet envelope for portable export."""
+    salt = os.urandom(16)
+    key = derive_password_key(password, salt)
+    token = _fernet_from_key(key).encrypt(_json_bytes(payload)).decode("utf-8")
+    return {
+        "encrypted": True,
+        "passwordProtected": True,
+        "envelopeVersion": ENVELOPE_VERSION,
+        "algorithm": ALGORITHM,
+        "kdf": PASSWORD_KDF,
+        "iterations": PASSWORD_ITERATIONS,
+        "salt": base64.urlsafe_b64encode(salt).decode("ascii"),
+        "ciphertext": token,
+        "createdAt": _now(),
+    }
+
+
+def password_decrypt_payload(envelope: dict[str, Any], password: str) -> dict[str, Any]:
+    """Reverse of password_encrypt_payload. Raises SecureStorageError on bad password."""
+    if not envelope.get("passwordProtected"):
+        raise SecureStorageError("Payload is not password-protected.")
+    if envelope.get("algorithm") != ALGORITHM or envelope.get("kdf") != PASSWORD_KDF:
+        raise SecureStorageError("Unsupported password-protected payload.")
+    salt = base64.urlsafe_b64decode(str(envelope.get("salt") or "").encode("ascii"))
+    iterations = int(envelope.get("iterations") or PASSWORD_ITERATIONS)
+    key = derive_password_key(password, salt, iterations=iterations)
+    try:
+        raw = _fernet_from_key(key).decrypt(str(envelope.get("ciphertext") or "").encode("utf-8"))
+    except InvalidToken as e:
+        raise SecureStorageError("Password did not unlock this export.") from e
+    data = json.loads(raw.decode("utf-8"))
+    if not isinstance(data, dict):
+        raise SecureStorageError("Decrypted export did not contain a JSON object.")
+    return data

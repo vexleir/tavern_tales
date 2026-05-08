@@ -1,15 +1,18 @@
-"""Default BDSM-aware preference categories.
+"""Default preference questionnaire — sourced from the curated kink catalog.
 
-The checklist is inspired by common BDSM/kink negotiation domains, but the
-wording is original to Tavern Tales and stays conceptual, neutral, and
-non-graphic. Each item still keeps fantasy interest, text-roleplay willingness,
-and real-world willingness separate.
+Every new profile is seeded with the categories from `kink_catalog.CATEGORIES`,
+in display order (vanilla -> edge). Each item starts at "not at all" (interest
+scale = 0) so the questionnaire is opt-in to rate.
+
+When the catalog grows, `merge_default_categories` adds the new categories /
+items to existing profiles without touching anything the user already rated.
 """
 
 from __future__ import annotations
 
 from copy import deepcopy
 
+import kink_library
 from preference_schema import (
     FantasyInterest,
     IntensityPreference,
@@ -23,7 +26,7 @@ from preference_schema import (
 )
 
 
-def _item(item_id: str, label: str, description: str) -> PreferenceItem:
+def _item(item_id: str, label: str, description: str = "") -> PreferenceItem:
     return PreferenceItem(
         id=item_id,
         label=label,
@@ -31,131 +34,32 @@ def _item(item_id: str, label: str, description: str) -> PreferenceItem:
         fantasyInterest=FantasyInterest.NONE,
         realWorldWillingness=RealWorldWillingness.HARD_NO,
         textRoleplayWillingness=TextRoleplayWillingness.NO,
-        intensityPreference=IntensityPreference.LIGHT,
+        intensityPreference=IntensityPreference.MODERATE,
+        textFantasy=False,
+        realWorldFantasy=False,
         fantasyOnly=True,
-        partnerSharePermission=PartnerSharePermission.PRIVATE,
+        partnerSharePermission=PartnerSharePermission.FULL,
+        sourceLibrary="kink_library",
     )
 
 
 def default_categories() -> list[PreferenceCategory]:
-    return [
-        PreferenceCategory(
-            id="power_dynamics",
-            label="Power Dynamics",
-            description="Negotiated authority, service, surrender, leadership, and role exchange. The role selector means this profile initiates/directs, follows/yields, or is open to either.",
-            items=[
-                _item("power_guidance", "Dominance, guidance, or leadership", "Choose initiate/direct if this profile leads or guides; choose follow/yield if this profile is led or guided."),
-                _item("power_submission", "Submission, surrender, or being guided", "Choose follow/yield if this profile is the submitting or guided side; choose initiate/direct if this profile guides a submitting partner."),
-                _item("power_switching", "Switching between leading and following", "Choose either if this profile may shift between leading and following; otherwise choose the preferred side."),
-                _item("power_service", "Service-oriented dynamic", "Choose initiate/direct if this profile receives or directs service; choose follow/yield if this profile performs service."),
-                _item("power_ownership_symbolic", "Symbolic ownership language", "Choose initiate/direct if this profile is the claiming or guiding side; choose follow/yield if this profile is the belonging or claimed side."),
-                _item("power_protocol", "Protocol and etiquette", "Choose initiate/direct if this profile sets titles, rituals, or protocol; choose follow/yield if this profile follows them."),
-                _item("power_training", "Training or improvement arc", "Choose initiate/direct if this profile teaches or corrects; choose follow/yield if this profile practices or is corrected."),
-                _item("power_trust", "Trust-based vulnerability", "A scene focuses on earned trust, boundaries, and emotional safety."),
-            ],
-        ),
-        PreferenceCategory(
-            id="control_themes",
-            label="Control Themes",
-            description="Rules, restraint, permission, anticipation, and clearly bounded control. The role selector means this profile initiates/directs, follows/yields, or is open to either.",
-            items=[
-                _item("control_rules", "Setting or following structured rules", "Choose initiate/direct if this profile sets or enforces rules; choose follow/yield if this profile follows them."),
-                _item("control_permission", "Permission and approval dynamic", "Choose initiate/direct if this profile grants, denies, or manages permission; choose follow/yield if this profile asks or waits for permission."),
-                _item("control_restraint_light", "Light restraint themes", "Choose initiate/direct if this profile applies or controls the restraint motif; choose follow/yield if this profile is the restrained side."),
-                _item("control_blindfold", "Blindfold or sensory focus", "Choose initiate/direct if this profile creates or guides reduced-information play; choose follow/yield if this profile experiences it."),
-                _item("control_suspense", "Suspenseful limitations", "Choose initiate/direct if this profile creates the limitation; choose follow/yield if this profile navigates it."),
-                _item("control_choice", "Choice under pressure", "Choose initiate/direct if this profile presents bounded choices; choose follow/yield if this profile chooses within them."),
-                _item("control_confinement_symbolic", "Symbolic confinement", "Locked doors, private rooms, or bounded spaces create narrative pressure without implying real-world consent."),
-                _item("control_chastity_symbolic", "Symbolic self-control", "Choose initiate/direct if this profile sets the patience or self-control structure; choose follow/yield if this profile follows it."),
-            ],
-        ),
-        PreferenceCategory(
-            id="fantasy_elements",
-            label="Fantasy Elements",
-            description="Fictional roleplay devices, archetypes, costumes, transformations, and taboo-as-fiction boundaries.",
-            items=[
-                _item("fantasy_magic_bond", "Magical bonds", "A symbolic connection shapes trust, loyalty, or destiny."),
-                _item("fantasy_secret_identity", "Secret identities", "Hidden roles, masks, or aliases create dramatic tension."),
-                _item("fantasy_transformation", "Symbolic transformation", "A character changes status, role, or self-understanding."),
-                _item("fantasy_captor_captive", "Captor and captive fiction", "A fictional high-control scenario is explored with clear fantasy-only framing."),
-                _item("fantasy_authority_roleplay", "Authority roleplay", "A scene uses fictional authority, hierarchy, or rank as dramatic structure."),
-                _item("fantasy_student_mentor", "Mentor and student", "Instruction, challenge, praise, and correction drive the relationship arc."),
-                _item("fantasy_pet_role_symbolic", "Pet or creature role symbolism", "Nonhuman or pet-like roles are used as playful, symbolic identity play."),
-                _item("fantasy_mask_costume", "Masks, costumes, or personas", "Clothing, symbols, or assumed identities help define the scene."),
-            ],
-        ),
-        PreferenceCategory(
-            id="social_dynamics",
-            label="Social Dynamics",
-            description="Partner sharing, group context, visibility, secrecy, rivalry, and negotiated attention. Choose this profile's side where a theme has roles.",
-            items=[
-                _item("social_partner_sharing", "Partner-sharing themes", "A story explores negotiated attention, trust, and boundaries with others."),
-                _item("social_observation", "Being observed or witnessed", "This profile may be the side being seen, supervised, or witnessed in a controlled way."),
-                _item("social_observing", "Observing or witnessing others", "This profile may be the side watching, supervising, or witnessing without taking over the scene."),
-                _item("social_group_scene", "Small-group scene context", "More than two characters are present, with explicit boundaries and roles."),
-                _item("social_rivalry", "Rivalry or competition", "Characters use competition as a source of energy and tension."),
-                _item("social_chosen_circle", "Chosen circle", "A trusted group or community shapes the scene context."),
-                _item("social_public_adjacent", "Public-adjacent secrecy", "The tension comes from discretion, privacy, or almost-being-seen without explicit exposure."),
-                _item("social_after_scene_discussion", "After-scene conversation", "Characters compare feelings, meaning, and boundaries after the fictional scene."),
-            ],
-        ),
-        PreferenceCategory(
-            id="emotional_tone",
-            label="Emotional Tone",
-            description="Praise, fear, tenderness, humiliation-as-fiction, intensity, and aftercare needs.",
-            items=[
-                _item("tone_tender", "Tender and reassuring", "The scene emphasizes care, patience, and emotional steadiness."),
-                _item("tone_praise", "Praise and affirmation", "Encouragement, admiration, or approval is a core reward."),
-                _item("tone_strict", "Strict but controlled", "The scene feels firm, exacting, and deliberate without becoming unsafe."),
-                _item("tone_mysterious", "Mysterious and charged", "The scene emphasizes secrecy, curiosity, and anticipation."),
-                _item("tone_playful", "Playful tension", "The scene uses banter, teasing, or games without crossing limits."),
-                _item("tone_humiliation_fiction", "Humiliation as fiction", "Embarrassment, status contrast, or teasing is used only within explicit boundaries."),
-                _item("tone_fear_suspense", "Fear or suspense play", "The scene uses fictional danger, uncertainty, or intimidation with safety controls."),
-                _item("tone_aftercare_focus", "Aftercare-centered resolution", "The story intentionally includes reassurance, grounding, and emotional repair."),
-            ],
-        ),
-        PreferenceCategory(
-            id="interaction_style",
-            label="Interaction Style",
-            description="How scenes are paced, negotiated, described, interrupted, and resolved.",
-            items=[
-                _item("style_slow_burn", "Slow burn", "The story develops gradually with room for choice and reflection."),
-                _item("style_direct", "Direct scene framing", "The setup gets to the central situation quickly and clearly."),
-                _item("style_collaborative", "Collaborative worldbuilding", "The user and narrator shape details together as the scene unfolds."),
-                _item("style_checkins", "Frequent check-ins", "The scene includes explicit pauses, confirmation, and boundary reminders."),
-                _item("style_safeword_visible", "Safeword or pause signal present", "A clear interruption signal exists in-fiction or in the meta-notes."),
-                _item("style_fade_to_black", "Fade-to-black handling", "The scene keeps explicit action offscreen while preserving emotion and story stakes."),
-                _item("style_negotiation_scene", "Negotiation-focused scene", "The conversation about limits, interests, and expectations is part of the roleplay."),
-                _item("style_debrief", "Debrief and reflection", "The ending highlights what worked, what changed, and what remains fictional."),
-            ],
-        ),
-        PreferenceCategory(
-            id="sensation_play",
-            label="Sensation Play",
-            description="Conceptual preferences for tactile intensity, impact, temperature, texture, and sensory contrast. The role selector means this profile initiates/directs, experiences/follows, or is open to either.",
-            items=[
-                _item("sensation_light_touch", "Light sensory teasing", "Choose initiate/direct if this profile creates or guides the sensation; choose experience/follow if this profile feels it."),
-                _item("sensation_impact_symbolic", "Impact as story texture", "Choose initiate/direct if this profile creates the impact motif; choose experience/follow if this profile is the affected side."),
-                _item("sensation_temperature", "Temperature contrast", "Choose initiate/direct if this profile applies or controls the contrast; choose experience/follow if this profile feels it."),
-                _item("sensation_texture", "Texture focus", "Choose initiate/direct if this profile introduces the material or texture; choose experience/follow if this profile feels or responds to it."),
-                _item("sensation_sound", "Sound and rhythm", "Choose initiate/direct if this profile creates the rhythm or cues; choose experience/follow if this profile responds to them."),
-                _item("sensation_endurance", "Endurance or intensity arc", "The scene explores rising intensity and clear stopping points."),
-            ],
-        ),
-        PreferenceCategory(
-            id="symbols_and_gear",
-            label="Symbols And Gear",
-            description="Non-graphic interest in props, clothing, objects, and symbols that define a roleplay mood.",
-            items=[
-                _item("gear_collar_symbolic", "Collar or token symbolism", "A collar, charm, ribbon, or token represents belonging or agreement."),
-                _item("gear_cuffs_symbolic", "Cuffs or restraint symbols", "Restraint objects appear as visual or narrative symbols."),
-                _item("gear_rope_aesthetic", "Rope aesthetic", "Rope, knots, or bindings are used for beauty, trust, or ritualized atmosphere."),
-                _item("gear_leather_latex_style", "Leather, latex, or formal style", "Distinct clothing or materials help create character, authority, or mood."),
-                _item("gear_tools_unseen", "Tools kept offscreen", "Props may be implied or prepared, while explicit use stays undescribed."),
-                _item("gear_private_collection", "Private collection or ritual space", "A room, cabinet, or kit signals preparation, care, and boundaries."),
-            ],
-        ),
-    ]
+    """Build seed categories from the curated catalog."""
+    out: list[PreferenceCategory] = []
+    for category in kink_library.list_categories():
+        items = [
+            _item(str(it["id"]), str(it["label"]), str(it.get("description", "")))
+            for it in category["items"]  # type: ignore[index]
+        ]
+        out.append(
+            PreferenceCategory(
+                id=str(category["id"]),
+                label=str(category["label"]),
+                description=str(category["description"]),
+                items=items,
+            )
+        )
+    return out
 
 
 def merge_default_categories(profile: UserPreferenceProfile) -> UserPreferenceProfile:

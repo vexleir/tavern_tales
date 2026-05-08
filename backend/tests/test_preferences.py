@@ -57,7 +57,11 @@ async def test_preference_profiles_are_encrypted_at_rest(temp_preference_dirs):
     path = preference_store.PREFERENCES_DIR / f"{saved.profileId}.json"
     raw = path.read_text(encoding="utf-8")
     assert json.loads(raw)["encrypted"] is True
-    assert "Alex" not in raw
+    # The plaintext JSON would contain these as quoted-key/value pairs; their
+    # absence indicates the payload was actually encrypted (a bare substring
+    # like "Alex" can collide with random base64 in a long ciphertext).
+    assert '"displayName":"Alex"' not in raw
+    assert '"displayName": "Alex"' not in raw
     assert "keep this private" not in raw
 
     loaded = await preference_store.load_profile(saved.profileId)
@@ -83,49 +87,62 @@ def test_redaction_omits_private_notes_and_reality_bridge(temp_preference_dirs):
     assert redacted["realityBridge"]["conditions"] == []
 
 
-def test_default_profile_has_bdsm_style_checklist_domains(temp_preference_dirs):
+def test_default_profile_has_categorized_questionnaire(temp_preference_dirs):
     import preference_store
 
     profile = preference_store.new_profile("Jordan")
-    categories = {category.id: category for category in profile.categories}
+    category_ids = [c.id for c in profile.categories]
 
-    for required in {
-        "power_dynamics",
-        "control_themes",
-        "fantasy_elements",
-        "social_dynamics",
-        "emotional_tone",
-        "interaction_style",
-    }:
-        assert required in categories
+    # New profiles are seeded with multiple categories ordered vanilla -> edge.
+    assert "affection_romance" in category_ids, "expected the most vanilla category to be present"
+    assert "sex_positions" in category_ids
+    assert "taboo_fantasies" in category_ids, "expected an edge-end category to be present"
 
-    assert "sensation_play" in categories
-    assert "symbols_and_gear" in categories
-    assert len(categories["power_dynamics"].items) >= 8
-    assert "initiates/directs, follows/yields" in categories["power_dynamics"].description
-    all_item_ids = {item.id for category in profile.categories for item in category.items}
-    assert "power_submission" in all_item_ids
-    assert "control_restraint_light" in all_item_ids
-    assert "sensation_impact_symbolic" in all_item_ids
-    assert "style_safeword_visible" in all_item_ids
+    # Vanilla categories must come before edge categories.
+    assert category_ids.index("affection_romance") < category_ids.index("taboo_fantasies")
+    assert category_ids.index("sex_positions") < category_ids.index("pain_edge")
+
+    # Every seeded item must declare its catalog source and start unrated.
+    all_items = [item for c in profile.categories for item in c.items]
+    assert len(all_items) > 50, "expected the curated catalog to seed many items"
+    assert all(item.sourceLibrary == "kink_library" for item in all_items)
+    assert all(item.interestScale == 0 for item in all_items)
+
+    # Item ids must be globally unique across categories.
+    ids = [item.id for item in all_items]
+    assert len(ids) == len(set(ids)), "duplicate item ids in seed"
 
 
 @pytest.mark.asyncio
-async def test_existing_profiles_receive_new_default_items(temp_preference_dirs):
+async def test_existing_profiles_receive_new_catalog_categories(temp_preference_dirs):
+    """When the catalog grows, existing profiles pick up new categories /
+    items without overwriting anything the user already rated."""
     import preference_store
+    from preference_schema import PreferenceCategory, PreferenceItem
 
     profile = preference_store.new_profile("Legacy")
-    profile.categories = profile.categories[:1]
-    profile.categories[0].items = profile.categories[0].items[:1]
-    profile.categories[0].items[0].label = "Guidance and leadership"
+    # Simulate an old profile that only has one stub category.
+    profile.categories = [
+        PreferenceCategory(
+            id="affection_romance",
+            label="Affection & Romance",
+            description="(stale)",
+            items=[PreferenceItem(id="klib_affection_romance_kissing", label="Kissing")],
+        )
+    ]
     saved = await preference_store.save_profile(profile, bump_version=False)
 
     loaded = await preference_store.load_profile(saved.profileId)
     assert loaded is not None
-    categories = {category.id: category for category in loaded.categories}
-    assert "sensation_play" in categories
-    assert any(item.id == "power_submission" for item in categories["power_dynamics"].items)
-    assert categories["power_dynamics"].items[0].label == "Dominance, guidance, or leadership"
+    category_ids = [c.id for c in loaded.categories]
+
+    # Fresh categories from the catalog should have been merged in.
+    assert "sex_positions" in category_ids
+    assert "taboo_fantasies" in category_ids
+
+    # The pre-existing item is still present.
+    affection = next(c for c in loaded.categories if c.id == "affection_romance")
+    assert any(item.id == "klib_affection_romance_kissing" for item in affection.items)
 
 
 def test_matching_keeps_fantasy_and_real_world_boundaries_separate(temp_preference_dirs):

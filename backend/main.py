@@ -25,7 +25,10 @@ from fastapi.responses import JSONResponse, StreamingResponse
 from pydantic import BaseModel, Field, ValidationError
 
 import extraction
+import fantasy_generator
 import game_rules
+import kink_catalog_overrides
+import kink_library
 import memory
 import model_resolver
 import preference_merger
@@ -42,6 +45,7 @@ from preference_schema import (
     ContextType,
     GeneratedFantasy,
     IntensityPreference,
+    SceneQuestionnaire,
     SharingMode,
     UserPreferenceProfile,
 )
@@ -62,7 +66,13 @@ from schema import (
     SessionStatus,
     StatBound,
 )
-from secure_storage import SecureStorageError, export_local_key_backup, password_encrypt_text
+from secure_storage import (
+    SecureStorageError,
+    export_local_key_backup,
+    password_decrypt_payload,
+    password_encrypt_payload,
+    password_encrypt_text,
+)
 
 configure_logging()
 log = logging.getLogger(__name__)
@@ -217,6 +227,7 @@ class ImportPreferenceProfileRequest(BaseModel):
     profile: dict[str, Any]
     userId: str = Field(default="local_default", max_length=120)
     displayNameSuffix: str = Field(default="(Imported)", max_length=80)
+    password: str | None = Field(default=None, min_length=1, max_length=512)
 
 
 class RandomFantasyRequest(BaseModel):
@@ -259,6 +270,21 @@ class SaveFantasyRequest(BaseModel):
 class ExportFantasyRequest(BaseModel):
     mode: SharingMode = SharingMode.SUMMARY_ONLY
     password: str | None = Field(default=None, min_length=1, max_length=512)
+
+
+class FantasyCreatorGenerateRequest(BaseModel):
+    firstProfileId: str
+    secondProfileId: str
+    questionnaire: SceneQuestionnaire
+    model: str | None = Field(default=None, max_length=160)
+    save: bool = True
+
+
+class FantasyCreatorVariantRequest(BaseModel):
+    fantasyId: str
+    direction: str = Field(default="lighter", pattern=r"^(lighter|darker)$")
+    model: str | None = Field(default=None, max_length=160)
+    save: bool = True
 
 
 class CreateSessionRequest(BaseModel):
@@ -435,28 +461,43 @@ async def delete_preference_profile(profile_id: str):
 
 
 @app.get("/api/preference-profiles/{profile_id}/export")
-async def export_preference_profile(profile_id: str, include_private: bool = False):
+async def export_preference_profile(
+    profile_id: str,
+    include_private: bool = False,
+    password: str | None = None,
+):
     try:
         profile = await preference_store.load_profile(profile_id)
         if profile is None or profile.status.value == "deleted":
             raise HTTPException(404, "preference profile not found")
         payload = preference_logic.redact_profile(profile, include_private=include_private)
         suffix = "private" if include_private else "redacted"
-        return JSONResponse(
-            content={
-                "exportType": "tavern_tales_preference_profile",
-                "schemaVersion": profile.schemaVersion,
-                "exportedAt": datetime.now(timezone.utc).isoformat(),
-                "owner": {
-                    "userId": profile.userId,
-                    "profileId": profile.profileId,
-                    "profileVersion": profile.profileVersion,
-                    "displayName": profile.displayName,
-                },
-                "profile": payload,
-                "exportIncludesPrivate": include_private,
-                "fantasiesIncluded": False,
+        export_doc: dict[str, Any] = {
+            "exportType": "tavern_tales_preference_profile",
+            "schemaVersion": profile.schemaVersion,
+            "exportedAt": datetime.now(timezone.utc).isoformat(),
+            "owner": {
+                "userId": profile.userId,
+                "profileId": profile.profileId,
+                "profileVersion": profile.profileVersion,
+                "displayName": profile.displayName,
             },
+            "profile": payload,
+            "exportIncludesPrivate": include_private,
+            "fantasiesIncluded": False,
+        }
+        if password:
+            if len(password) < 8:
+                raise HTTPException(400, "password must be at least 8 characters")
+            envelope = password_encrypt_payload(export_doc, password)
+            envelope["exportType"] = "tavern_tales_preference_profile_protected"
+            envelope["owner"] = {"displayName": profile.displayName}
+            return JSONResponse(
+                content=envelope,
+                headers={"Content-Disposition": f'attachment; filename="{profile_id}.{suffix}.protected.preferences.json"'},
+            )
+        return JSONResponse(
+            content=export_doc,
             headers={"Content-Disposition": f'attachment; filename="{profile_id}.{suffix}.preferences.json"'},
         )
     except HTTPException:
@@ -468,8 +509,22 @@ async def export_preference_profile(profile_id: str, include_private: bool = Fal
 @app.post("/api/preference-profiles/import")
 async def import_preference_profile(req: ImportPreferenceProfileRequest):
     try:
-        profile = await preference_store.import_profile(req.profile, user_id=req.userId, display_name_suffix=req.displayNameSuffix)
+        payload = req.profile
+        # If the supplied document is a password-protected export envelope,
+        # decrypt it first and then unwrap the inner profile dict.
+        if isinstance(payload, dict) and payload.get("passwordProtected") is True:
+            if not req.password:
+                raise HTTPException(401, "this export is password-protected; supply password to import")
+            try:
+                payload = password_decrypt_payload(payload, req.password)
+            except SecureStorageError as e:
+                raise HTTPException(401, str(e))
+        if isinstance(payload, dict) and "profile" in payload and "categories" not in payload:
+            payload = payload["profile"]
+        profile = await preference_store.import_profile(payload, user_id=req.userId, display_name_suffix=req.displayNameSuffix)
         return preference_logic.redact_profile(profile, include_private=True)
+    except HTTPException:
+        raise
     except Exception as e:  # noqa: BLE001
         raise _sensitive_storage_http_error(e)
 
@@ -480,6 +535,82 @@ async def export_preference_key_backup():
         return export_local_key_backup()
     except Exception as e:  # noqa: BLE001
         raise _sensitive_storage_http_error(e)
+
+
+@app.get("/api/kink-library")
+async def get_kink_library():
+    """Return the full kink catalog (id + label per entry)."""
+    return {"kinks": kink_library.list_kinks()}
+
+
+# ---------------------------------------------------------------------------
+# Admin: catalog overrides (delete / add items globally)
+# ---------------------------------------------------------------------------
+
+
+class AdminDeleteRequest(BaseModel):
+    ids: list[str] = Field(default_factory=list, max_length=2000)
+    password: str = Field(..., min_length=1, max_length=512)
+
+
+class AdminAddRequest(BaseModel):
+    categoryId: str = Field(..., min_length=1, max_length=80)
+    label: str = Field(..., min_length=1, max_length=160)
+    description: str = Field(default="", max_length=400)
+    password: str = Field(..., min_length=1, max_length=512)
+
+
+class AdminRestoreRequest(BaseModel):
+    ids: list[str] = Field(default_factory=list, max_length=2000)
+    password: str = Field(..., min_length=1, max_length=512)
+
+
+def _require_admin(password: str) -> None:
+    if not kink_catalog_overrides.verify_admin_password(password):
+        raise HTTPException(401, "invalid admin password")
+
+
+@app.get("/api/admin/kink-library/overrides")
+async def get_kink_overrides():
+    """Public-read metadata about which catalog ids the admin has hidden or
+    added. No password required because this information is already implicit
+    in /api/kink-library — surfacing it lets the frontend filter saved-profile
+    items that have since been deleted from the catalog."""
+    return kink_catalog_overrides.load_overrides()
+
+
+@app.post("/api/admin/kink-library/delete")
+async def admin_delete_kinks(req: AdminDeleteRequest):
+    _require_admin(req.password)
+    if not req.ids:
+        raise HTTPException(400, "no ids provided")
+    payload = kink_catalog_overrides.mark_deleted(req.ids)
+    kink_library.reload_kinks()
+    return {"status": "ok", "overrides": payload}
+
+
+@app.post("/api/admin/kink-library/restore")
+async def admin_restore_kinks(req: AdminRestoreRequest):
+    _require_admin(req.password)
+    if not req.ids:
+        raise HTTPException(400, "no ids provided")
+    payload = kink_catalog_overrides.restore_deleted(req.ids)
+    kink_library.reload_kinks()
+    return {"status": "ok", "overrides": payload}
+
+
+@app.post("/api/admin/kink-library/add")
+async def admin_add_kink(req: AdminAddRequest):
+    _require_admin(req.password)
+    valid_categories = {str(c["id"]) for c in kink_library.list_categories()}
+    if req.categoryId not in valid_categories:
+        raise HTTPException(400, f"unknown category: {req.categoryId}")
+    try:
+        entry = kink_catalog_overrides.add_item(req.categoryId, req.label, req.description)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    kink_library.reload_kinks()
+    return {"status": "ok", "item": entry}
 
 
 @app.post("/api/preference-profiles/{profile_id}/random-fantasy")
@@ -538,6 +669,65 @@ async def create_overlap_fantasy(req: OverlapFantasyRequest):
         if req.save:
             fantasy = await preference_store.save_fantasy(fantasy)
         return preference_logic.redact_fantasy(fantasy, include_private=True)
+    except HTTPException:
+        raise
+    except Exception as e:  # noqa: BLE001
+        raise _sensitive_storage_http_error(e)
+
+
+@app.post("/api/fantasy-creator/generate", dependencies=[Depends(chat_rate_limit)])
+async def generate_fantasy_creator_scene(req: FantasyCreatorGenerateRequest):
+    try:
+        first = await preference_store.load_profile(req.firstProfileId)
+        second = await preference_store.load_profile(req.secondProfileId)
+        if first is None or second is None or first.status.value == "deleted" or second.status.value == "deleted":
+            raise HTTPException(404, "one or more preference profiles were not found")
+        # Hard gate: CNC / Dark archetypes require explicit acknowledgement.
+        if req.questionnaire.archetype.value in {"cnc", "dark"} and not req.questionnaire.cncAcknowledged:
+            raise HTTPException(400, "this archetype requires both partners to acknowledge consent before generation")
+        model = req.model or NSFW_CREATIVE_MODEL
+        resolved = await model_resolver.resolve_utility_model(model, gm_fallback=NSFW_CREATIVE_MODEL)
+        fantasy = await fantasy_generator.generate_structured_fantasy(
+            first,
+            second,
+            req.questionnaire,
+            model=resolved,
+        )
+        if req.save:
+            fantasy = await preference_store.save_fantasy(fantasy)
+        return preference_logic.redact_fantasy(fantasy, include_private=True)
+    except HTTPException:
+        raise
+    except Exception as e:  # noqa: BLE001
+        raise _sensitive_storage_http_error(e)
+
+
+@app.post("/api/fantasy-creator/generate-variant", dependencies=[Depends(chat_rate_limit)])
+async def generate_fantasy_creator_variant(req: FantasyCreatorVariantRequest):
+    try:
+        base = await preference_store.load_fantasy(req.fantasyId)
+        if base is None:
+            raise HTTPException(404, "base fantasy not found")
+        if base.sceneQuestionnaire is None or base.secondProfileId is None:
+            raise HTTPException(400, "base fantasy was not created via the Fantasy Creator and cannot produce a variant")
+        first = await preference_store.load_profile(base.ownerProfileId)
+        second = await preference_store.load_profile(base.secondProfileId)
+        if first is None or second is None:
+            raise HTTPException(404, "one or more source profiles for the base fantasy could not be loaded")
+        model = req.model or NSFW_CREATIVE_MODEL
+        resolved = await model_resolver.resolve_utility_model(model, gm_fallback=NSFW_CREATIVE_MODEL)
+        variant = await fantasy_generator.generate_tone_variant(
+            base,
+            first,
+            second,
+            req.direction,
+            model=resolved,
+        )
+        if req.save:
+            variant = await preference_store.save_fantasy(variant)
+            base.toneVariantIds = [*(base.toneVariantIds or []), variant.id]
+            await preference_store.save_fantasy(base)
+        return preference_logic.redact_fantasy(variant, include_private=True)
     except HTTPException:
         raise
     except Exception as e:  # noqa: BLE001

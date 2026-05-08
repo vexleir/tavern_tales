@@ -1,11 +1,7 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useId, useState } from 'react';
 import { apiFetch, describeApiError, parseErrorResponse } from './lib/api';
 
-const fantasyInterestOptions = ['none', 'low', 'medium', 'high', 'favorite'];
-const realWorldOptions = ['hard_no', 'soft_no', 'discuss_only', 'maybe', 'yes'];
-const textRoleplayOptions = ['no', 'maybe', 'yes'];
 const intensityOptions = ['light', 'moderate', 'intense'];
-const shareOptions = ['private', 'overlap_only', 'summary', 'full'];
 const fantasySharingOptions = ['private', 'summary_only', 'overlap_only', 'full_scene', 'full_scene_with_notes'];
 const contextOptions = ['ai', 'partner', 'multiplayer'];
 const povOptions = ['first', 'third'];
@@ -14,14 +10,15 @@ const consentOptions = ['explicit', 'implied', 'negotiated'];
 const customResponseOptions = ['scale', 'yes_no', 'multi_select', 'text'];
 const giverReceiverOptions = ['giver', 'receiver', 'both'];
 const giverReceiverLabels = {
-  giver: 'I initiate, guide, or direct it',
-  receiver: 'I follow, yield, or experience it',
-  both: 'I am open to either side'
+  giver: 'Giving',
+  receiver: 'Receiving',
+  both: 'Both'
 };
-const roleSideHelp = 'For submission or surrender themes, follow/yield means this profile is the submitting side; initiate/direct means this profile guides a submitting partner.';
-const fantasyOnlyRealWorldValues = new Set(['hard_no', 'soft_no']);
-const onboardingCategoryIds = ['power_dynamics', 'control_themes', 'fantasy_elements', 'emotional_tone'];
-const onboardingSteps = ['Identity', 'Boundaries', 'Sharing', 'Reality Bridge', 'Review'];
+// Onboarding shows the most-vanilla categories first so a brand-new user isn't
+// staring at the edge end of the catalog. They can rate anything else later in
+// the advanced editor.
+const onboardingCategoryIds = ['affection_romance', 'sex_positions', 'body_appreciation', 'sensual_play'];
+const onboardingSteps = ['Identity', 'Interests', 'Review'];
 
 function labelize(value) {
   return String(value || '').replaceAll('_', ' ');
@@ -85,6 +82,110 @@ function TextControl({ label, value, onChange, rows = 2, placeholder = '', readO
   );
 }
 
+const SCALE_LABELS = {
+  0: 'Not at all',
+  5: 'Curious',
+  10: 'Completely',
+};
+
+function scaleHint(value) {
+  const n = Number(value) || 0;
+  if (n === 0) return 'Not at all';
+  if (n <= 3) return 'Mildly';
+  if (n === 5) return 'Curious';
+  if (n <= 6) return 'Open to it';
+  if (n <= 9) return 'Into it';
+  return 'Completely into it';
+}
+
+function ScaleControl({ label, value, onChange, name }) {
+  const v = Number(value) || 0;
+  const fallbackId = useId();
+  const groupName = name || `scale-${fallbackId}`;
+  return (
+    <fieldset className="flex flex-col gap-1 text-xs text-slate-400">
+      <legend className="uppercase tracking-widest flex justify-between w-full">
+        <span>{label}</span>
+        <span className="text-amber-400 font-bold">{v} — {scaleHint(v)}</span>
+      </legend>
+      <div className="flex gap-1 items-center" role="radiogroup">
+        {Array.from({ length: 11 }, (_, i) => i).map(n => (
+          <label
+            key={n}
+            className={`flex items-center justify-center w-7 h-7 rounded-full border text-[11px] font-bold cursor-pointer transition select-none ${
+              v === n
+                ? 'bg-fantasy-accent border-fantasy-accent text-white'
+                : 'bg-fantasy-dark border-slate-600 text-slate-300 hover:border-amber-500'
+            }`}
+            title={SCALE_LABELS[n] || scaleHint(n)}
+          >
+            <input
+              type="radio"
+              name={groupName}
+              value={n}
+              checked={v === n}
+              onChange={() => onChange(n)}
+              className="sr-only"
+            />
+            {n}
+          </label>
+        ))}
+      </div>
+      <div className="flex justify-between text-[10px] text-slate-500 px-0.5">
+        <span>{SCALE_LABELS[0]}</span>
+        <span>{SCALE_LABELS[5]}</span>
+        <span>{SCALE_LABELS[10]}</span>
+      </div>
+    </fieldset>
+  );
+}
+
+function CheckboxControl({ label, checked, onChange }) {
+  return (
+    <label className="flex items-center gap-2 text-xs text-slate-300 cursor-pointer">
+      <input
+        type="checkbox"
+        checked={Boolean(checked)}
+        onChange={(e) => onChange(e.target.checked)}
+        className="accent-amber-500"
+      />
+      <span>{label}</span>
+    </label>
+  );
+}
+
+function RadioGroupControl({ label, value, options, onChange, name, optionLabels = {} }) {
+  const fallbackId = useId();
+  const groupName = name || `radio-${fallbackId}`;
+  return (
+    <fieldset className="flex flex-col gap-1 text-xs text-slate-400">
+      <legend className="uppercase tracking-widest">{label}</legend>
+      <div className="flex flex-wrap gap-1" role="radiogroup">
+        {options.map(option => (
+          <label
+            key={option}
+            className={`px-3 py-1.5 rounded border text-xs font-bold cursor-pointer transition select-none ${
+              value === option
+                ? 'bg-fantasy-accent border-fantasy-accent text-white'
+                : 'bg-fantasy-dark border-slate-600 text-slate-300 hover:border-amber-500'
+            }`}
+          >
+            <input
+              type="radio"
+              name={groupName}
+              value={option}
+              checked={value === option}
+              onChange={() => onChange(option)}
+              className="sr-only"
+            />
+            {optionLabel(option, optionLabels)}
+          </label>
+        ))}
+      </div>
+    </fieldset>
+  );
+}
+
 export default function PreferenceProfiles({ onBack, onCreateCampaignFromDraft }) {
   const [profiles, setProfiles] = useState([]);
   const [profile, setProfile] = useState(null);
@@ -92,6 +193,14 @@ export default function PreferenceProfiles({ onBack, onCreateCampaignFromDraft }
   const [activeFantasy, setActiveFantasy] = useState(null);
   const [newProfileName, setNewProfileName] = useState('');
   const [customDraft, setCustomDraft] = useState({ label: '', description: '', responseType: 'text' });
+  const [questionnaireSearch, setQuestionnaireSearch] = useState('');
+  const [questionnaireFilter, setQuestionnaireFilter] = useState('all'); // 'all' | 'rated' | 'unrated' | 'revisit' | 'learn'
+  const [collapsedCategories, setCollapsedCategories] = useState(() => new Set());
+  const DEFAULT_EXPANDED_CATEGORIES = 3;
+  const [adminMode, setAdminMode] = useState(false);
+  const [adminSelected, setAdminSelected] = useState(() => new Set());
+  const [adminAddForm, setAdminAddForm] = useState({ categoryId: '', label: '', description: '' });
+  const [catalogValidIds, setCatalogValidIds] = useState(null); // null = not loaded; Set = the active catalog ids
   const [protectDraft, setProtectDraft] = useState({ password: '', hint: '' });
   const [unlockDraft, setUnlockDraft] = useState({ password: '', unlocked: false });
   const [exportDraftMode, setExportDraftMode] = useState('summary_only');
@@ -110,11 +219,6 @@ export default function PreferenceProfiles({ onBack, onCreateCampaignFromDraft }
   });
   const [onboardingStep, setOnboardingStep] = useState(0);
   const [showAdvancedEditor, setShowAdvancedEditor] = useState(false);
-  const [onboardingDefaults, setOnboardingDefaults] = useState({
-    textRoleplayWillingness: 'maybe',
-    partnerSharePermission: 'private',
-    intensityPreference: 'moderate'
-  });
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
 
@@ -182,6 +286,27 @@ export default function PreferenceProfiles({ onBack, onCreateCampaignFromDraft }
       });
     return () => { cancelled = true; };
   }, [openProfile]);
+
+  const reloadCatalog = async () => {
+    try {
+      const res = await apiFetch('/api/kink-library');
+      if (!res.ok) return;
+      const data = await res.json();
+      const ids = new Set((data.kinks || []).map(k => k.id));
+      setCatalogValidIds(ids);
+    } catch {
+      // Non-fatal — without it we just don't filter deleted items.
+    }
+  };
+
+  useEffect(() => {
+    let cancelled = false;
+    apiFetch('/api/kink-library')
+      .then(r => r.ok ? r.json() : { kinks: [] })
+      .then(data => { if (!cancelled) setCatalogValidIds(new Set((data.kinks || []).map(k => k.id))); })
+      .catch(() => { /* non-fatal */ });
+    return () => { cancelled = true; };
+  }, []);
 
   const createProfile = async () => {
     setBusy(true);
@@ -264,12 +389,6 @@ export default function PreferenceProfiles({ onBack, onCreateCampaignFromDraft }
     });
   };
 
-  const updateRealityBridge = (field, value) => {
-    patchProfile(next => {
-      next.realityBridge = { ...(next.realityBridge || {}), [field]: value };
-    });
-  };
-
   const updateItem = (categoryIndex, itemIndex, patch) => {
     patchProfile(next => {
       const item = next.categories[categoryIndex].items[itemIndex];
@@ -286,20 +405,6 @@ export default function PreferenceProfiles({ onBack, onCreateCampaignFromDraft }
           category.items[itemIndex] = { ...current, ...patch, updatedAt: nowIso() };
           return;
         }
-      }
-    });
-  };
-
-  const applyOnboardingDefaults = () => {
-    patchProfile(next => {
-      for (const category of next.categories || []) {
-        category.items = (category.items || []).map(item => ({
-          ...item,
-          textRoleplayWillingness: onboardingDefaults.textRoleplayWillingness,
-          partnerSharePermission: onboardingDefaults.partnerSharePermission,
-          intensityPreference: onboardingDefaults.intensityPreference,
-          updatedAt: nowIso()
-        }));
       }
     });
   };
@@ -356,6 +461,72 @@ export default function PreferenceProfiles({ onBack, onCreateCampaignFromDraft }
       const current = next.customPreferences[index];
       next.customPreferences[index] = { ...current, ...patch, updatedAt: nowIso() };
     });
+  };
+
+  const toggleAdminSelected = (id) => {
+    setAdminSelected(prev => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id); else next.add(id);
+      return next;
+    });
+  };
+
+  const adminDeleteSelected = async () => {
+    const ids = Array.from(adminSelected);
+    if (ids.length === 0) {
+      setError('No items selected.');
+      return;
+    }
+    const ok = window.confirm(`Permanently hide ${ids.length} item${ids.length === 1 ? '' : 's'} from the catalog? Future profiles will no longer see them. This can be undone via the admin overrides file.`);
+    if (!ok) return;
+    const password = window.prompt('Admin password to confirm deletion:');
+    if (!password) return;
+    setBusy(true); setError('');
+    try {
+      const res = await apiFetch('/api/admin/kink-library/delete', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ ids, password })
+      });
+      if (!res.ok) {
+        if (res.status === 401) throw new Error('Wrong admin password.');
+        throw new Error(await parseErrorResponse(res));
+      }
+      await reloadCatalog();
+      setAdminSelected(new Set());
+    } catch (e) {
+      setError(`Could not delete: ${describeApiError(e)}`);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const adminAddItem = async () => {
+    const { categoryId, label, description } = adminAddForm;
+    if (!categoryId || !label.trim()) {
+      setError('Pick a category and enter a label.');
+      return;
+    }
+    const password = window.prompt('Admin password to confirm adding this item to the catalog:');
+    if (!password) return;
+    setBusy(true); setError('');
+    try {
+      const res = await apiFetch('/api/admin/kink-library/add', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ categoryId, label: label.trim(), description: description.trim(), password })
+      });
+      if (!res.ok) {
+        if (res.status === 401) throw new Error('Wrong admin password.');
+        throw new Error(await parseErrorResponse(res));
+      }
+      await reloadCatalog();
+      setAdminAddForm({ categoryId: '', label: '', description: '' });
+    } catch (e) {
+      setError(`Could not add: ${describeApiError(e)}`);
+    } finally {
+      setBusy(false);
+    }
   };
 
   const generateFantasyDraft = async () => {
@@ -680,10 +851,28 @@ export default function PreferenceProfiles({ onBack, onCreateCampaignFromDraft }
   const exportProfile = async () => {
     if (!profile) return;
     try {
-      const res = await apiFetch(`/api/preference-profiles/${profile.profileId}/export?include_private=${includePrivateExport}`);
+      let password = '';
+      if (window.confirm('Password-protect this export? Recommended when sharing the file with a partner.\n\nClick OK to set a password, Cancel to export unprotected.')) {
+        const entered = window.prompt('Set a password (min 8 characters). You will need to share this password separately with anyone importing this profile.');
+        if (entered === null) return;
+        if (entered.length < 8) {
+          setError('Password must be at least 8 characters.');
+          return;
+        }
+        const confirm = window.prompt('Confirm the password.');
+        if (confirm !== entered) {
+          setError('Passwords did not match.');
+          return;
+        }
+        password = entered;
+      }
+      const params = new URLSearchParams({ include_private: String(includePrivateExport) });
+      if (password) params.set('password', password);
+      const res = await apiFetch(`/api/preference-profiles/${profile.profileId}/export?${params.toString()}`);
       if (!res.ok) throw new Error(await parseErrorResponse(res));
       const payload = await res.json();
-      downloadJson(`${profile.profileId}.${includePrivateExport ? 'private' : 'redacted'}.preferences.json`, payload);
+      const protectedSuffix = password ? '.protected' : '';
+      downloadJson(`${profile.profileId}.${includePrivateExport ? 'private' : 'redacted'}${protectedSuffix}.preferences.json`, payload);
     } catch (e) {
       setError(`Could not export profile: ${describeApiError(e)}`);
     }
@@ -710,10 +899,20 @@ export default function PreferenceProfiles({ onBack, onCreateCampaignFromDraft }
     setError('');
     try {
       const payload = JSON.parse(await file.text());
+      const isProtected = payload && payload.passwordProtected === true;
+      const body = { profile: payload.passwordProtected ? payload : (payload.profile || payload) };
+      if (isProtected) {
+        const password = window.prompt('This profile is password-protected. Enter the password to import.');
+        if (!password) {
+          setBusy(false);
+          return;
+        }
+        body.password = password;
+      }
       const res = await apiFetch('/api/preference-profiles/import', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ profile: payload.profile || payload })
+        body: JSON.stringify(body)
       });
       if (!res.ok) throw new Error(await parseErrorResponse(res));
       const imported = await res.json();
@@ -744,6 +943,15 @@ export default function PreferenceProfiles({ onBack, onCreateCampaignFromDraft }
           <p className="text-xs uppercase tracking-widest text-slate-500 mt-1">Fantasy interest is not real-world consent</p>
         </div>
         <div className="flex gap-2">
+          <button
+            onClick={() => { setAdminMode(v => !v); setAdminSelected(new Set()); }}
+            title="Reveal admin controls for catalog editing. Destructive actions still require the admin password."
+            className={`border rounded px-3 py-2 text-xs ${
+              adminMode
+                ? 'bg-red-900/50 hover:bg-red-800 border-red-700 text-red-100'
+                : 'bg-slate-800 hover:bg-slate-700 border-slate-600 text-slate-300'
+            }`}
+          >Admin {adminMode ? 'On' : 'Off'}</button>
           <button onClick={onBack} className="bg-slate-800 hover:bg-slate-700 border border-slate-600 text-slate-200 rounded px-4 py-2 text-sm">Menu</button>
           <button onClick={() => saveProfile()} disabled={!profile || busy} className="bg-fantasy-accent hover:bg-amber-600 disabled:opacity-50 text-white rounded px-4 py-2 text-sm font-bold">Save Profile</button>
         </div>
@@ -875,27 +1083,25 @@ export default function PreferenceProfiles({ onBack, onCreateCampaignFromDraft }
                       <p className="text-sm text-slate-400 mb-4">{category.description}</p>
                       <div className="flex flex-col gap-3">
                         {category.items.map(item => (
-                          <div key={item.id} className="grid grid-cols-1 md:grid-cols-[1fr_130px_130px_150px_170px] gap-3 items-end border-t border-slate-700/60 pt-3">
+                          <div key={item.id} className="border-t border-slate-700/60 pt-3 flex flex-col gap-2">
                             <div>
                               <div className="font-bold text-slate-100">{item.label}</div>
                               <div className="text-sm text-slate-400">{item.description}</div>
                             </div>
-                            <SelectControl label="Fantasy" value={item.fantasyInterest} options={fantasyInterestOptions} onChange={(v) => updateOnboardingItem(item.id, { fantasyInterest: v })} />
-                            <SelectControl label="Text" value={item.textRoleplayWillingness} options={textRoleplayOptions} onChange={(v) => updateOnboardingItem(item.id, { textRoleplayWillingness: v })} />
-                            <SelectControl
-                              label="Real world"
-                              value={item.realWorldWillingness}
-                              options={realWorldOptions}
-                              onChange={(v) => updateOnboardingItem(item.id, { realWorldWillingness: v, fantasyOnly: fantasyOnlyRealWorldValues.has(v) })}
-                            />
-                            <SelectControl
-                              label="My role in this theme"
+                            <ScaleControl name={`onboarding-${item.id}`} label="Into it (0-10)" value={item.interestScale ?? 0} onChange={(v) => updateOnboardingItem(item.id, { interestScale: v })} />
+                            <RadioGroupControl
+                              name={`onboarding-role-${item.id}`}
+                              label="Giving / Receiving / Both"
                               value={item.giverReceiverRole || 'both'}
                               options={giverReceiverOptions}
                               optionLabels={giverReceiverLabels}
-                              help={roleSideHelp}
                               onChange={(v) => updateOnboardingItem(item.id, { giverReceiverRole: v })}
                             />
+                            <div className="grid grid-cols-1 md:grid-cols-3 gap-2 bg-fantasy-dark/30 border border-slate-700/50 rounded p-2 text-xs">
+                              <CheckboxControl label="Text fantasy" checked={item.textFantasy} onChange={(v) => updateOnboardingItem(item.id, { textFantasy: v })} />
+                              <CheckboxControl label="Real World Fantasy" checked={item.realWorldFantasy} onChange={(v) => updateOnboardingItem(item.id, { realWorldFantasy: v })} />
+                              <CheckboxControl label="Interested in learning more" checked={item.interestedInLearning} onChange={(v) => updateOnboardingItem(item.id, { interestedInLearning: v })} />
+                            </div>
                           </div>
                         ))}
                       </div>
@@ -905,36 +1111,9 @@ export default function PreferenceProfiles({ onBack, onCreateCampaignFromDraft }
               )}
 
               {onboardingStep === 2 && (
-                <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-                  <SelectControl label="Default text roleplay" value={onboardingDefaults.textRoleplayWillingness} options={textRoleplayOptions} onChange={(v) => setOnboardingDefaults(d => ({ ...d, textRoleplayWillingness: v }))} />
-                  <SelectControl label="Default sharing" value={onboardingDefaults.partnerSharePermission} options={shareOptions} onChange={(v) => setOnboardingDefaults(d => ({ ...d, partnerSharePermission: v }))} />
-                  <SelectControl label="Default intensity" value={onboardingDefaults.intensityPreference} options={intensityOptions} onChange={(v) => setOnboardingDefaults(d => ({ ...d, intensityPreference: v }))} />
-                  <button onClick={applyOnboardingDefaults} className="md:col-span-3 bg-slate-800 hover:bg-slate-700 border border-slate-600 rounded px-3 py-2 text-sm">Apply Defaults To Checklist</button>
-                  <div className="md:col-span-3 text-xs text-slate-500">Sharing defaults stay conservative unless you choose otherwise. Private notes are never shared by default.</div>
-                </div>
-              )}
-
-              {onboardingStep === 3 && (
-                <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-                  <label className="flex items-end gap-2 text-sm text-slate-300 pb-2">
-                    <input type="checkbox" checked={Boolean(profile.realityBridge?.enabled)} onChange={(e) => updateRealityBridge('enabled', e.target.checked)} className="accent-amber-500" />
-                    Enable reality bridge
-                  </label>
-                  <SelectControl label="Intent" value={profile.realityBridge?.intent || 'discussion_only'} options={['discussion_only', 'maybe_try', 'want_to_try']} onChange={(v) => updateRealityBridge('intent', v)} />
-                  <SelectControl label="Comfort" value={profile.realityBridge?.comfortLevel || 'curious'} options={['curious', 'cautious', 'interested', 'enthusiastic']} onChange={(v) => updateRealityBridge('comfortLevel', v)} />
-                  <TextControl label="Non-negotiables" value={(profile.realityBridge?.nonNegotiables || []).join('\n')} onChange={(v) => updateRealityBridge('nonNegotiables', v.split('\n').map(x => x.trim()).filter(Boolean))} />
-                  <TextControl label="Conditions" value={(profile.realityBridge?.conditions || []).join('\n')} onChange={(v) => updateRealityBridge('conditions', v.split('\n').map(x => x.trim()).filter(Boolean))} />
-                  <label className="flex items-end gap-2 text-sm text-slate-300 pb-2">
-                    <input type="checkbox" checked={Boolean(profile.realityBridge?.shareWithPartner)} onChange={(e) => updateRealityBridge('shareWithPartner', e.target.checked)} className="accent-amber-500" />
-                    Share with partner
-                  </label>
-                </div>
-              )}
-
-              {onboardingStep === 4 && (
                 <div className="bg-slate-950/30 border border-slate-700 rounded p-4 text-sm text-slate-300">
                   <div className="font-bold text-amber-400 mb-2">Ready to save this profile</div>
-                  <p>Completing onboarding records a review timestamp and opens the full editor. You can return to the editor any time.</p>
+                  <p>Completing onboarding records a review timestamp and opens the full editor with every category visible. You can return any time to keep rating.</p>
                   <p className="mt-2 text-slate-400">Fantasy interest remains fictional preference data, not real-world consent.</p>
                 </div>
               )}
@@ -982,52 +1161,202 @@ export default function PreferenceProfiles({ onBack, onCreateCampaignFromDraft }
                 </div>
               </section>
 
-              {profile.categories.map((category, categoryIndex) => (
-                <section key={category.id} className="bg-fantasy-panel/40 border border-slate-700/50 rounded-lg p-5">
-                  <div className="mb-4">
-                    <h2 className="text-xl font-serif text-amber-500">{category.label}</h2>
-                    <p className="text-sm text-slate-400 mt-1">{category.description}</p>
+              <section className="bg-fantasy-panel/40 border border-slate-700/50 rounded-lg p-4 sticky top-[73px] z-10">
+                <div className="flex flex-col md:flex-row gap-2 items-stretch">
+                  <input
+                    value={questionnaireSearch}
+                    onChange={(e) => setQuestionnaireSearch(e.target.value)}
+                    placeholder="Search across all categories…"
+                    className="flex-1 bg-fantasy-dark border border-slate-600 rounded px-3 py-2 text-sm text-slate-200 focus:outline-none focus:border-fantasy-accent"
+                  />
+                  <select
+                    value={questionnaireFilter}
+                    onChange={(e) => setQuestionnaireFilter(e.target.value)}
+                    className="bg-fantasy-dark border border-slate-600 rounded px-3 py-2 text-sm text-slate-200"
+                  >
+                    <option value="all">All items</option>
+                    <option value="rated">Rated or flagged</option>
+                    <option value="unrated">Not yet rated</option>
+                    <option value="learn">Interested in learning more</option>
+                    <option value="revisit">Marked to revisit</option>
+                  </select>
+                  <button
+                    onClick={() => setCollapsedCategories(new Set(profile.categories.map(c => c.id)))}
+                    className="bg-slate-800 hover:bg-slate-700 border border-slate-600 rounded px-3 py-2 text-xs"
+                  >Collapse all</button>
+                  <button
+                    onClick={() => setCollapsedCategories(new Set())}
+                    className="bg-slate-800 hover:bg-slate-700 border border-slate-600 rounded px-3 py-2 text-xs"
+                  >Expand all</button>
+                </div>
+              </section>
+
+              {adminMode && (
+                <section className="bg-red-950/30 border border-red-700/50 rounded-lg p-4 flex flex-col gap-3">
+                  <div className="flex items-center justify-between gap-3 flex-wrap">
+                    <div>
+                      <h2 className="text-sm font-bold uppercase tracking-widest text-red-300">Admin — catalog editing</h2>
+                      <p className="text-xs text-red-100/80 mt-1">
+                        Tick the checkbox next to any catalog item to mark it for permanent deletion. Click below to delete the marked items (admin password required). Deletions hide items from all future profiles.
+                      </p>
+                    </div>
+                    <button
+                      onClick={adminDeleteSelected}
+                      disabled={adminSelected.size === 0 || busy}
+                      className="bg-red-700 hover:bg-red-600 disabled:opacity-40 text-white rounded px-4 py-2 text-sm font-bold"
+                    >Delete {adminSelected.size} selected</button>
                   </div>
-                  <div className="flex flex-col gap-4">
-                    {category.items.map((item, itemIndex) => (
-                      <div key={item.id} className="bg-fantasy-dark/50 border border-slate-700 rounded-lg p-4">
-                        <div className="flex flex-col gap-1 mb-4">
-                          <h3 className="text-base font-bold text-slate-100">{item.label}</h3>
-                          <p className="text-sm text-slate-400">{item.description}</p>
+                  <div className="border-t border-red-700/30 pt-3 grid grid-cols-1 md:grid-cols-[1fr_2fr_2fr_auto] gap-2 items-end">
+                    <label className="flex flex-col gap-1 text-xs text-red-200">
+                      <span className="uppercase tracking-widest">Add to category</span>
+                      <select
+                        value={adminAddForm.categoryId}
+                        onChange={(e) => setAdminAddForm(f => ({ ...f, categoryId: e.target.value }))}
+                        className="bg-fantasy-dark border border-slate-600 rounded px-3 py-2 text-sm text-slate-200"
+                      >
+                        <option value="">— pick category —</option>
+                        {profile.categories.map(c => (
+                          <option key={c.id} value={c.id}>{c.label}</option>
+                        ))}
+                      </select>
+                    </label>
+                    <label className="flex flex-col gap-1 text-xs text-red-200">
+                      <span className="uppercase tracking-widest">New question label</span>
+                      <input
+                        value={adminAddForm.label}
+                        onChange={(e) => setAdminAddForm(f => ({ ...f, label: e.target.value }))}
+                        placeholder="e.g. Sensory grounding rituals"
+                        className="bg-fantasy-dark border border-slate-600 rounded px-3 py-2 text-sm text-slate-200 focus:outline-none focus:border-fantasy-accent"
+                      />
+                    </label>
+                    <label className="flex flex-col gap-1 text-xs text-red-200">
+                      <span className="uppercase tracking-widest">Description (optional)</span>
+                      <input
+                        value={adminAddForm.description}
+                        onChange={(e) => setAdminAddForm(f => ({ ...f, description: e.target.value }))}
+                        className="bg-fantasy-dark border border-slate-600 rounded px-3 py-2 text-sm text-slate-200 focus:outline-none focus:border-fantasy-accent"
+                      />
+                    </label>
+                    <button
+                      onClick={adminAddItem}
+                      disabled={busy || !adminAddForm.categoryId || !adminAddForm.label.trim()}
+                      className="bg-emerald-700 hover:bg-emerald-600 disabled:opacity-40 text-white rounded px-4 py-2 text-sm font-bold"
+                    >Add question</button>
+                  </div>
+                </section>
+              )}
+
+              {profile.categories.map((category, categoryIndex) => {
+                // Filter out catalog items the admin has hidden (saved profile
+                // data may still contain them but the active catalog doesn't).
+                // Items not sourced from the kink library (custom user entries)
+                // bypass this filter.
+                const activeIndexedItems = category.items
+                  .map((item, itemIndex) => ({ item, itemIndex }))
+                  .filter(({ item }) => {
+                    if (item.sourceLibrary !== 'kink_library') return true;
+                    if (catalogValidIds === null) return true;
+                    return catalogValidIds.has(item.id);
+                  });
+                const indexedItems = activeIndexedItems;
+                const search = questionnaireSearch.trim().toLowerCase();
+                const filterActive = Boolean(search) || questionnaireFilter !== 'all';
+                const filtered = indexedItems.filter(({ item }) => {
+                  if (search && !(item.label || '').toLowerCase().includes(search) && !(item.description || '').toLowerCase().includes(search)) return false;
+                  if (questionnaireFilter === 'rated' && (item.interestScale ?? 0) === 0 && !item.interestedInLearning && !item.revisitLater) return false;
+                  if (questionnaireFilter === 'unrated' && ((item.interestScale ?? 0) > 0 || item.interestedInLearning || item.revisitLater)) return false;
+                  if (questionnaireFilter === 'revisit' && !item.revisitLater) return false;
+                  if (questionnaireFilter === 'learn' && !item.interestedInLearning) return false;
+                  return true;
+                });
+                const ratedCount = indexedItems.filter(({ item }) => (item.interestScale ?? 0) > 0 || item.interestedInLearning || item.revisitLater).length;
+                if (filterActive && filtered.length === 0) return null;
+                const userCollapsed = collapsedCategories.has(category.id);
+                const userExpanded = !userCollapsed && collapsedCategories.size === 0;
+                const defaultExpanded = categoryIndex < DEFAULT_EXPANDED_CATEGORIES;
+                const expanded = filterActive ? true : (userExpanded || (collapsedCategories.size > 0 ? !userCollapsed : defaultExpanded));
+                const toggleExpanded = () => setCollapsedCategories(prev => {
+                  const next = new Set(prev);
+                  if (prev.size === 0) {
+                    // Was using defaults; capture current default-expanded set, then toggle this one.
+                    profile.categories.forEach((c, idx) => {
+                      if (idx >= DEFAULT_EXPANDED_CATEGORIES) next.add(c.id);
+                    });
+                  }
+                  if (next.has(category.id)) next.delete(category.id); else next.add(category.id);
+                  return next;
+                });
+                return (
+                <section key={category.id} className="bg-fantasy-panel/40 border border-slate-700/50 rounded-lg overflow-hidden">
+                  <button
+                    onClick={toggleExpanded}
+                    className="w-full text-left p-5 flex items-center justify-between gap-4 hover:bg-fantasy-panel/60 transition"
+                  >
+                    <div className="flex-1 min-w-0">
+                      <h2 className="text-xl font-serif text-amber-500 flex items-center gap-2">
+                        <span className="text-slate-500 text-sm">{expanded ? '▼' : '▶'}</span>
+                        {category.label}
+                      </h2>
+                      <p className="text-sm text-slate-400 mt-1">{category.description}</p>
+                    </div>
+                    <div className="text-xs text-slate-400 shrink-0 text-right">
+                      <div className="text-amber-400 font-bold">{ratedCount} / {indexedItems.length}</div>
+                      <div>rated or flagged</div>
+                      {filterActive && <div className="text-slate-500 mt-1">{filtered.length} match{filtered.length === 1 ? '' : 'es'}</div>}
+                    </div>
+                  </button>
+                  {expanded && (
+                  <div className="px-5 pb-5 flex flex-col gap-4">
+                    {filtered.map(({ item, itemIndex }) => (
+                      <div key={item.id} className={`bg-fantasy-dark/50 border rounded-lg p-4 ${adminMode && adminSelected.has(item.id) ? 'border-red-700/70 ring-1 ring-red-700/40' : 'border-slate-700'}`}>
+                        <div className="flex items-start gap-3 mb-4">
+                          {adminMode && item.sourceLibrary === 'kink_library' && (
+                            <label className="flex items-center pt-1">
+                              <input
+                                type="checkbox"
+                                checked={adminSelected.has(item.id)}
+                                onChange={() => toggleAdminSelected(item.id)}
+                                className="accent-red-500 w-4 h-4"
+                                title="Mark to permanently hide from the catalog"
+                              />
+                            </label>
+                          )}
+                          <div className="flex-1 min-w-0">
+                            <h3 className="text-base font-bold text-slate-100">{item.label}</h3>
+                            {item.description && <p className="text-sm text-slate-400">{item.description}</p>}
+                          </div>
                         </div>
-                        <div className="grid grid-cols-1 md:grid-cols-4 gap-3">
-                          <SelectControl label="Fantasy interest" value={item.fantasyInterest} options={fantasyInterestOptions} onChange={(v) => updateItem(categoryIndex, itemIndex, { fantasyInterest: v })} />
-                          <SelectControl label="Text roleplay" value={item.textRoleplayWillingness} options={textRoleplayOptions} onChange={(v) => updateItem(categoryIndex, itemIndex, { textRoleplayWillingness: v })} />
-                          <SelectControl
-                            label="Real world interest"
-                            value={item.realWorldWillingness}
-                            options={realWorldOptions}
-                            onChange={(v) => updateItem(categoryIndex, itemIndex, {
-                              realWorldWillingness: v,
-                              fantasyOnly: fantasyOnlyRealWorldValues.has(v)
-                            })}
-                          />
-                          <SelectControl label="Intensity" value={item.intensityPreference} options={intensityOptions} onChange={(v) => updateItem(categoryIndex, itemIndex, { intensityPreference: v })} />
-                          <SelectControl
-                            label="My role in this theme"
+                        <ScaleControl name={`item-${item.id}`} label="Into it (0-10)" value={item.interestScale ?? 0} onChange={(v) => updateItem(categoryIndex, itemIndex, { interestScale: v })} />
+                        <div className="mt-3">
+                          <RadioGroupControl
+                            name={`role-${item.id}`}
+                            label="Giving / Receiving / Both"
                             value={item.giverReceiverRole || 'both'}
                             options={giverReceiverOptions}
                             optionLabels={giverReceiverLabels}
-                            help={roleSideHelp}
                             onChange={(v) => updateItem(categoryIndex, itemIndex, { giverReceiverRole: v })}
                           />
-                          <SelectControl label="Partner share" value={item.partnerSharePermission} options={shareOptions} onChange={(v) => updateItem(categoryIndex, itemIndex, { partnerSharePermission: v })} />
+                        </div>
+                        <div className="mt-3 grid grid-cols-1 md:grid-cols-3 gap-2 bg-fantasy-dark/30 border border-slate-700/50 rounded p-3">
+                          <CheckboxControl label="Text fantasy" checked={item.textFantasy} onChange={(v) => updateItem(categoryIndex, itemIndex, { textFantasy: v })} />
+                          <CheckboxControl label="Real World Fantasy" checked={item.realWorldFantasy} onChange={(v) => updateItem(categoryIndex, itemIndex, { realWorldFantasy: v })} />
+                          <CheckboxControl label="Interested in learning more" checked={item.interestedInLearning} onChange={(v) => updateItem(categoryIndex, itemIndex, { interestedInLearning: v })} />
+                        </div>
+                        <div className="mt-3 grid grid-cols-1 md:grid-cols-2 gap-3">
                           <TextControl label="Private notes" value={item.commentsPrivate} onChange={(v) => updateItem(categoryIndex, itemIndex, { commentsPrivate: v })} />
                           <TextControl label="Shareable notes" value={item.commentsShareable} onChange={(v) => updateItem(categoryIndex, itemIndex, { commentsShareable: v })} />
                         </div>
                       </div>
                     ))}
                   </div>
+                  )}
                 </section>
-              ))}
+              );
+              })}
+
 
               <section className="bg-fantasy-panel/40 border border-slate-700/50 rounded-lg p-5">
-                <h2 className="text-xl font-serif text-amber-500 mb-4">Custom Questions</h2>
+                <h2 className="text-xl font-serif text-amber-500 mb-4">Custom Questions & Library Items</h2>
                 <div className="grid grid-cols-1 md:grid-cols-[1fr_1fr_150px_auto] gap-3 items-end mb-4">
                   <label className="flex flex-col gap-1 text-xs text-slate-400">
                     <span className="uppercase tracking-widest">Label</span>
@@ -1042,43 +1371,46 @@ export default function PreferenceProfiles({ onBack, onCreateCampaignFromDraft }
                 </div>
                 <div className="flex flex-col gap-3">
                   {visibleCustoms.map(({ question, index }) => (
-                    <div key={question.id || index} className="bg-fantasy-dark/50 border border-slate-700 rounded p-4 grid grid-cols-1 md:grid-cols-[1fr_140px_140px_120px_100px] gap-3">
-                      <TextControl label={`Question${question.status === 'archived' ? ' (archived)' : ''}`} rows={2} value={question.label} onChange={(v) => updateCustom(index, { label: v })} />
-                      <SelectControl
-                        label="My role"
+                    <div key={question.id || index} className="bg-fantasy-dark/50 border border-slate-700 rounded p-4 flex flex-col gap-3">
+                      <div className="flex items-baseline justify-between gap-3">
+                        <div className="flex-1 min-w-0">
+                          <div className="font-bold text-slate-100 truncate">
+                            {question.label}
+                            {question.sourceLibrary === 'kink_library' && (
+                              <span className="ml-2 text-[10px] uppercase tracking-widest bg-indigo-900/50 border border-indigo-700/50 text-indigo-300 px-1.5 py-0.5 rounded">library</span>
+                            )}
+                            {question.status === 'archived' && (
+                              <span className="ml-2 text-[10px] uppercase tracking-widest text-slate-500">(archived)</span>
+                            )}
+                          </div>
+                          {question.description && <div className="text-xs text-slate-400 mt-1">{question.description}</div>}
+                        </div>
+                        <div className="flex gap-2 shrink-0">
+                          <button onClick={() => updateCustom(index, { status: question.status === 'archived' ? 'active' : 'archived' })} className="bg-slate-800 hover:bg-slate-700 border border-slate-600 rounded px-3 py-1.5 text-xs">
+                            {question.status === 'archived' ? 'Restore' : 'Archive'}
+                          </button>
+                          <button onClick={() => updateCustom(index, { status: 'deleted' })} className="bg-red-900/40 hover:bg-red-800 text-red-200 border border-red-900/50 rounded px-3 py-1.5 text-xs">Delete</button>
+                        </div>
+                      </div>
+                      <ScaleControl name={`custom-${question.id || index}`} label="Into it (0-10)" value={question.interestScale ?? 0} onChange={(v) => updateCustom(index, { interestScale: v })} />
+                      <RadioGroupControl
+                        name={`custom-role-${question.id || index}`}
+                        label="Giving / Receiving / Both"
                         value={question.giverReceiverRole || 'both'}
                         options={giverReceiverOptions}
                         optionLabels={giverReceiverLabels}
-                        help={roleSideHelp}
                         onChange={(v) => updateCustom(index, { giverReceiverRole: v })}
                       />
-                      <SelectControl label="Sharing" value={question.partnerSharePermission || 'private'} options={shareOptions} onChange={(v) => updateCustom(index, { partnerSharePermission: v })} />
-                      <button onClick={() => updateCustom(index, { status: question.status === 'archived' ? 'active' : 'archived' })} className="self-end bg-slate-800 hover:bg-slate-700 border border-slate-600 rounded px-3 py-2 text-sm">
-                        {question.status === 'archived' ? 'Restore' : 'Archive'}
-                      </button>
-                      <button onClick={() => updateCustom(index, { status: 'deleted' })} className="self-end bg-red-900/40 hover:bg-red-800 text-red-200 border border-red-900/50 rounded px-3 py-2 text-sm">Delete</button>
+                      <div className="grid grid-cols-1 md:grid-cols-3 gap-2 bg-fantasy-dark/40 border border-slate-700/50 rounded p-2">
+                        <CheckboxControl label="Text fantasy" checked={question.textFantasy} onChange={(v) => updateCustom(index, { textFantasy: v })} />
+                        <CheckboxControl label="Real World Fantasy" checked={question.realWorldFantasy} onChange={(v) => updateCustom(index, { realWorldFantasy: v })} />
+                        <CheckboxControl label="Interested in learning more" checked={question.interestedInLearning} onChange={(v) => updateCustom(index, { interestedInLearning: v })} />
+                      </div>
                     </div>
                   ))}
                 </div>
               </section>
 
-              <section className="bg-fantasy-panel/40 border border-slate-700/50 rounded-lg p-5">
-                <h2 className="text-xl font-serif text-amber-500 mb-4">Reality Bridge</h2>
-                <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-                  <label className="flex items-end gap-2 text-sm text-slate-300 pb-2">
-                    <input type="checkbox" checked={Boolean(profile.realityBridge?.enabled)} onChange={(e) => updateRealityBridge('enabled', e.target.checked)} className="accent-amber-500" />
-                    Enabled
-                  </label>
-                  <SelectControl label="Intent" value={profile.realityBridge?.intent || 'discussion_only'} options={['discussion_only', 'maybe_try', 'want_to_try']} onChange={(v) => updateRealityBridge('intent', v)} />
-                  <SelectControl label="Comfort" value={profile.realityBridge?.comfortLevel || 'curious'} options={['curious', 'cautious', 'interested', 'enthusiastic']} onChange={(v) => updateRealityBridge('comfortLevel', v)} />
-                  <TextControl label="Non-negotiables" value={(profile.realityBridge?.nonNegotiables || []).join('\n')} onChange={(v) => updateRealityBridge('nonNegotiables', v.split('\n').map(x => x.trim()).filter(Boolean))} />
-                  <TextControl label="Conditions" value={(profile.realityBridge?.conditions || []).join('\n')} onChange={(v) => updateRealityBridge('conditions', v.split('\n').map(x => x.trim()).filter(Boolean))} />
-                  <label className="flex items-end gap-2 text-sm text-slate-300 pb-2">
-                    <input type="checkbox" checked={Boolean(profile.realityBridge?.shareWithPartner)} onChange={(e) => updateRealityBridge('shareWithPartner', e.target.checked)} className="accent-amber-500" />
-                    Share with partner
-                  </label>
-                </div>
-              </section>
             </>
           )}
         </section>
