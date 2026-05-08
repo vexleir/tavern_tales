@@ -93,20 +93,22 @@ def test_default_profile_has_categorized_questionnaire(temp_preference_dirs):
     profile = preference_store.new_profile("Jordan")
     category_ids = [c.id for c in profile.categories]
 
-    # New profiles are seeded from The Ultimate BDSM Checklist categories.
-    assert "bondage" in category_ids
-    assert "intamacy" in category_ids
-    assert "sexual_activity_penetration" in category_ids
+    # New profiles are seeded from broad questions condensed from The Ultimate BDSM Checklist.
+    assert "connection_intimacy" in category_ids
+    assert "restraint_bondage" in category_ids
+    assert "sexual_activity" in category_ids
 
-    # Category display order follows the source checklist.
-    assert category_ids.index("bondage") < category_ids.index("sexual_activity_penetration")
-    assert category_ids.index("role_play") < category_ids.index("sensation_play_non_impact")
+    # Category display order starts gentle and moves toward more specialized themes.
+    assert category_ids.index("connection_intimacy") < category_ids.index("roleplay_fantasy")
+    assert category_ids.index("restraint_bondage") < category_ids.index("impact_sensation")
 
     # Every seeded item must declare its catalog source and start unrated.
     all_items = [item for c in profile.categories for item in c.items]
-    assert len(all_items) > 200, "expected the checklist catalog to seed many items"
+    assert 30 <= len(all_items) <= 40, "expected a condensed checklist, not the full activity list"
     assert all(item.sourceLibrary == "kink_library" for item in all_items)
     assert all(item.interestScale == 0 for item in all_items)
+    assert any(item.label == "Light bondage & restraint" for item in all_items)
+    assert any(item.label == "Health, safety, and practical limits" for item in all_items)
 
     # Item ids must be globally unique across categories.
     ids = [item.id for item in all_items]
@@ -124,18 +126,18 @@ async def test_existing_profiles_receive_new_catalog_categories(temp_preference_
     # Simulate an old profile that only has one stub category.
     profile.categories = [
         PreferenceCategory(
-            id="bondage",
-            label="Bondage",
+            id="restraint_bondage",
+            label="Restraint & Bondage",
             description="(stale)",
             items=[
-                PreferenceItem(id="klib_bondage_arm_and_leg_sleeves_armbinders", label='Arm and Leg Sleeves ("Armbinders")'),
-                PreferenceItem(id="klib_bondage_legacy_question", label="Legacy question"),
+                PreferenceItem(id="klib_restraint_bondage_light_bondage_restraint", label="Light bondage & restraint"),
+                PreferenceItem(id="klib_restraint_bondage_legacy_question", label="Legacy question"),
             ],
         ),
         PreferenceCategory(
-            id="affection_romance",
-            label="Affection & Romance",
-            items=[PreferenceItem(id="klib_affection_romance_kissing", label="Kissing")],
+            id="bondage",
+            label="Bondage",
+            items=[PreferenceItem(id="klib_bondage_arm_and_leg_sleeves_armbinders", label='Arm and Leg Sleeves ("Armbinders")')],
         )
     ]
     saved = await preference_store.save_profile(profile, bump_version=False)
@@ -145,14 +147,14 @@ async def test_existing_profiles_receive_new_catalog_categories(temp_preference_
     category_ids = [c.id for c in loaded.categories]
 
     # Fresh categories from the catalog should have been merged in.
-    assert "bodily_fluids_and_functions" in category_ids
-    assert "sexual_activity_penetration" in category_ids
+    assert "connection_intimacy" in category_ids
+    assert "sexual_activity" in category_ids
 
     # The pre-existing item is still present.
-    bondage = next(c for c in loaded.categories if c.id == "bondage")
-    assert any(item.id == "klib_bondage_arm_and_leg_sleeves_armbinders" for item in bondage.items)
-    assert all(item.id != "klib_bondage_legacy_question" for item in bondage.items)
-    assert "affection_romance" not in category_ids
+    restraint = next(c for c in loaded.categories if c.id == "restraint_bondage")
+    assert any(item.id == "klib_restraint_bondage_light_bondage_restraint" for item in restraint.items)
+    assert all(item.id != "klib_restraint_bondage_legacy_question" for item in restraint.items)
+    assert "bondage" not in category_ids
 
 
 def test_matching_keeps_fantasy_and_real_world_boundaries_separate(temp_preference_dirs):

@@ -16,7 +16,7 @@ const giverReceiverLabels = {
 };
 // Onboarding now starts directly from The Ultimate BDSM Checklist categories.
 // The advanced editor still exposes the full checklist.
-const onboardingCategoryIds = ['bondage', 'intamacy', 'sensation_play_non_impact', 'sexual_activity_penetration'];
+const onboardingCategoryIds = ['connection_intimacy', 'restraint_bondage', 'impact_sensation', 'sexual_activity'];
 const onboardingSteps = ['Interests', 'Review'];
 
 function labelize(value) {
