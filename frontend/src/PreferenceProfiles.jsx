@@ -14,11 +14,10 @@ const giverReceiverLabels = {
   receiver: 'Receiving',
   both: 'Both'
 };
-// Onboarding shows the most-vanilla categories first so a brand-new user isn't
-// staring at the edge end of the catalog. They can rate anything else later in
-// the advanced editor.
-const onboardingCategoryIds = ['affection_romance', 'sex_positions', 'body_appreciation', 'sensual_play'];
-const onboardingSteps = ['Identity', 'Interests', 'Review'];
+// Onboarding now starts directly from The Ultimate BDSM Checklist categories.
+// The advanced editor still exposes the full checklist.
+const onboardingCategoryIds = ['bondage', 'intamacy', 'sensation_play_non_impact', 'sexual_activity_penetration'];
+const onboardingSteps = ['Interests', 'Review'];
 
 function labelize(value) {
   return String(value || '').replaceAll('_', ' ');
@@ -1024,12 +1023,12 @@ export default function PreferenceProfiles({ onBack, onCreateCampaignFromDraft }
               <div className="flex flex-wrap items-center justify-between gap-3">
                 <div>
                   <h2 className="text-2xl font-serif text-amber-500">Profile Onboarding</h2>
-                  <p className="text-sm text-slate-400 mt-1">Set the basics now. You can skip any category and refine everything later.</p>
+                  <p className="text-sm text-slate-400 mt-1">Rate a few checklist categories now. You can skip any category and refine everything later.</p>
                 </div>
                 <button onClick={() => setShowAdvancedEditor(true)} className="bg-slate-800 hover:bg-slate-700 border border-slate-600 rounded px-3 py-2 text-sm">Advanced Editor</button>
               </div>
 
-              <div className="grid grid-cols-2 md:grid-cols-5 gap-2">
+              <div className="grid grid-cols-2 gap-2">
                 {onboardingSteps.map((step, index) => (
                   <button
                     key={step}
@@ -1046,35 +1045,6 @@ export default function PreferenceProfiles({ onBack, onCreateCampaignFromDraft }
               </div>
 
               {onboardingStep === 0 && (
-                <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-                  <label className="flex flex-col gap-1 text-xs text-slate-400">
-                    <span className="uppercase tracking-widest">Display name</span>
-                    <input value={profile.displayName || ''} onChange={(e) => patchProfile(next => { next.displayName = e.target.value; })} className="bg-fantasy-dark border border-slate-600 rounded px-3 py-2 text-sm text-slate-200 focus:outline-none focus:border-fantasy-accent" />
-                  </label>
-                  <label className="flex flex-col gap-1 text-xs text-slate-400">
-                    <span className="uppercase tracking-widest">Gender</span>
-                    <input value={profile.globalPreferences?.gender || ''} onChange={(e) => updateGlobal('gender', e.target.value)} className="bg-fantasy-dark border border-slate-600 rounded px-3 py-2 text-sm text-slate-200 focus:outline-none focus:border-fantasy-accent" />
-                  </label>
-                  <label className="flex flex-col gap-1 text-xs text-slate-400">
-                    <span className="uppercase tracking-widest">Orientation</span>
-                    <input value={profile.globalPreferences?.orientation || ''} onChange={(e) => updateGlobal('orientation', e.target.value)} className="bg-fantasy-dark border border-slate-600 rounded px-3 py-2 text-sm text-slate-200 focus:outline-none focus:border-fantasy-accent" />
-                  </label>
-                  <label className="flex flex-col gap-1 text-xs text-slate-400">
-                    <span className="uppercase tracking-widest">Relationship style</span>
-                    <input value={profile.globalPreferences?.relationshipStyle || ''} onChange={(e) => updateGlobal('relationshipStyle', e.target.value)} className="bg-fantasy-dark border border-slate-600 rounded px-3 py-2 text-sm text-slate-200 focus:outline-none focus:border-fantasy-accent" />
-                  </label>
-                  <SelectControl label="Consent style" value={profile.globalPreferences?.consentStyle || 'explicit'} options={consentOptions} onChange={(v) => updateGlobal('consentStyle', v)} />
-                  <SelectControl label="POV" value={profile.globalPreferences?.preferredPOV || 'third'} options={povOptions} onChange={(v) => updateGlobal('preferredPOV', v)} />
-                  <SelectControl label="Role" value={profile.globalPreferences?.rolePreference || 'none'} options={roleOptions} onChange={(v) => updateGlobal('rolePreference', v)} />
-                  <label className="flex items-end gap-2 text-sm text-slate-300 pb-2">
-                    <input type="checkbox" checked={Boolean(profile.globalPreferences?.fadeToBlack)} onChange={(e) => updateGlobal('fadeToBlack', e.target.checked)} className="accent-amber-500" />
-                    Fade to black
-                  </label>
-                  <TextControl label="Aftercare preference" value={profile.globalPreferences?.aftercarePreference || ''} onChange={(v) => updateGlobal('aftercarePreference', v)} />
-                </div>
-              )}
-
-              {onboardingStep === 1 && (
                 <div className="flex flex-col gap-4">
                   <div className="bg-slate-950/30 border border-slate-700 rounded p-3 text-sm text-slate-300">Fantasy interest, text roleplay, and real-world interest are separate. A fantasy favorite can still be a real-world hard no.</div>
                   {onboardingCategories.map(category => (
@@ -1110,7 +1080,7 @@ export default function PreferenceProfiles({ onBack, onCreateCampaignFromDraft }
                 </div>
               )}
 
-              {onboardingStep === 2 && (
+              {onboardingStep === 1 && (
                 <div className="bg-slate-950/30 border border-slate-700 rounded p-4 text-sm text-slate-300">
                   <div className="font-bold text-amber-400 mb-2">Ready to save this profile</div>
                   <p>Completing onboarding records a review timestamp and opens the full editor with every category visible. You can return any time to keep rating.</p>

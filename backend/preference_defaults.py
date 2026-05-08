@@ -63,10 +63,36 @@ def default_categories() -> list[PreferenceCategory]:
 
 
 def merge_default_categories(profile: UserPreferenceProfile) -> UserPreferenceProfile:
-    """Add newly introduced default categories/items without overwriting answers."""
+    """Replace built-in catalog questions with the current default checklist.
+
+    Existing answers are preserved only when an item is still part of the
+    current catalog. Custom preferences live outside categories and are left
+    untouched.
+    """
     defaults = default_categories()
+    default_category_ids = {category.id for category in defaults}
+    default_item_ids_by_category = {
+        category.id: {item.id for item in category.items}
+        for category in defaults
+    }
+    original_category_count = len(profile.categories)
+    profile.categories = [
+        category for category in profile.categories
+        if category.id in default_category_ids
+    ]
+    changed = len(profile.categories) != original_category_count
+
+    for category in profile.categories:
+        default_item_ids = default_item_ids_by_category.get(category.id, set())
+        original_item_count = len(category.items)
+        category.items = [
+            item for item in category.items
+            if item.id in default_item_ids
+        ]
+        if len(category.items) != original_item_count:
+            changed = True
+
     existing_categories = {category.id: category for category in profile.categories}
-    changed = False
 
     for default_category in defaults:
         existing = existing_categories.get(default_category.id)
